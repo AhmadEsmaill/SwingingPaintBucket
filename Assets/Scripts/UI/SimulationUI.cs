@@ -41,12 +41,7 @@ public class SimulationUI : MonoBehaviour
     private readonly string[] blendLabels = { "No Blend", "25%", "50%", "75%", "100%" };
     private int selectedBlendIdx = 0;     // default: No Blend
 
-    // Particle count selector
-    private readonly int[]    particleCounts = { 500, 1000, 2000, 10000, 20000 };
-    private readonly string[] particleLabels = { "500", "1,000", "2,000", "10,000", "20,000" };
-    private int selectedParticleIdx = 0;   // default: 500
-
-    // ── Styles ────────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────
     private GUIStyle titleStyle;
     private GUIStyle labelStyle;
     private GUIStyle panelStyle;
@@ -169,37 +164,6 @@ public class SimulationUI : MonoBehaviour
         GUIStyle hintStyle = new GUIStyle(labelStyle)
             { fontSize = 10, normal = { textColor = new Color(0.6f, 0.6f, 0.6f) } };
         GUILayout.Label("0°=horiz  45°=circle  90°=vert", hintStyle);
-
-        GUILayout.Space(10);
-
-        // ── Particle Count ─────────────────────────────────────
-        GUILayout.Label("Particle Count", titleStyle);
-        GUILayout.Space(4);
-
-        for (int i = 0; i < particleLabels.Length; i++)
-        {
-            GUIStyle style = (i == selectedParticleIdx) ? listItemSelectedStyle : listItemStyle;
-            string   label = (i == selectedParticleIdx)
-                ? "✓  " + particleLabels[i]
-                : "    " + particleLabels[i];
-
-            if (GUILayout.Button(label, style, GUILayout.Height(26)))
-            {
-                selectedParticleIdx = i;
-                if (sphSimulator != null)
-                    sphSimulator.initialParticleCount = particleCounts[selectedParticleIdx];
-            }
-        }
-
-        if (isRunning)
-        {
-            GUIStyle noteStyle = new GUIStyle(labelStyle)
-            {
-                fontSize = 10,
-                normal   = { textColor = new Color(1f, 0.8f, 0.3f) }
-            };
-            GUILayout.Label("Reset to apply new count", noteStyle);
-        }
 
         GUILayout.Space(10);
 
@@ -352,7 +316,7 @@ public class SimulationUI : MonoBehaviour
         flowController?.SetColorBlend(blendValues[selectedBlendIdx]);
 
         if (sphSimulator != null)
-            sphSimulator.initialParticleCount = particleCounts[selectedParticleIdx];
+            sphSimulator.initialParticleCount = 3000;
 
         pendulum.Initialize();
         sphSimulator?.Initialize();
@@ -382,7 +346,7 @@ public class SimulationUI : MonoBehaviour
         pendulum?.ResetSimulation();
 
         if (sphSimulator != null)
-            sphSimulator.initialParticleCount = particleCounts[selectedParticleIdx];
+            sphSimulator.initialParticleCount = 3000;
 
         sphSimulator?.Initialize();
         isRunning = false;

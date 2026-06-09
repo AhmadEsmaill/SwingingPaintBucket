@@ -430,10 +430,14 @@ public class SPHSimulator : MonoBehaviour
                 bool inHole = math.abs(lx) < halfHole;
                 if (inHole && ly > halfH + 0.002f)
                 {
-                    // Exit through hole — record world-space data then recycle
+                    // Exit through hole.
+                    // Constrain exit velocity: keep the axisY (downward) component,
+                    // strongly dampen lateral so paint doesn't spray sideways.
+                    float vyExit = math.max(vy, 0.3f);  // at least 0.3 m/s downward
+                    float vxExit = vx * 0.12f;           // only 12% of lateral escapes
                     exitFlags[i] = 1;
                     exitPos[i]   = p;
-                    exitVel[i]   = v;
+                    exitVel[i]   = axisX * vxExit + axisY * vyExit;
                     float rx = ((i % 17) / 17f - 0.5f) * halfW * 0.6f;
                     lx = rx;
                     ly = -halfH * 0.3f;

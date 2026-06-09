@@ -117,7 +117,7 @@ public class SceneBuilder
         sph.stiffness             = 200f;
         sph.viscosityCoeff        = 0.02f;
         sph.particleMass          = 0.005f;
-        sph.initialParticleCount  = 500;
+        sph.initialParticleCount  = 3000;
         sph.bucketWidth           = 0.15f;
         sph.bucketHeight          = 0.20f;
         sph.holeWidth             = 0.05f;
