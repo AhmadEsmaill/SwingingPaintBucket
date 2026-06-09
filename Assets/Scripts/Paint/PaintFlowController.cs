@@ -1,7 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// Generates paint droplets from the bucket using Torricelli's law
 public class PaintFlowController : MonoBehaviour
 {
     [Header("References")]
@@ -15,12 +14,15 @@ public class PaintFlowController : MonoBehaviour
     public float holeRadius = 0.005f;       // r - radius of exit hole in meters
     public float flowRateMultiplier = 1f;
 
+    [Header("SPH (assign to enable SPH mode; leave empty for Torricelli fallback)")]
+    public SPHSimulator sphSimulator;
+
     [Header("Pool Settings")]
     public int poolSize = 100;
 
     private List<PaintDroplet> dropletPool = new List<PaintDroplet>();
     private float spawnTimer;
-    private float spawnInterval = 0.05f;    // seconds between droplet spawns
+    private float spawnInterval = 0.05f;
 
     void Start()
     {
@@ -34,65 +36,73 @@ public class PaintFlowController : MonoBehaviour
         {
             GameObject obj = Instantiate(dropletPrefab);
             obj.SetActive(false);
-            PaintDroplet d = obj.GetComponent<PaintDroplet>();
-            dropletPool.Add(d);
+            dropletPool.Add(obj.GetComponent<PaintDroplet>());
         }
     }
 
     private PaintDroplet GetFromPool()
     {
         foreach (var d in dropletPool)
-        {
-            if (!d.gameObject.activeSelf)
-            {
-                d.gameObject.SetActive(true);
-                return d;
-            }
-        }
-        return null; // Pool exhausted
+            if (!d.gameObject.activeSelf) { d.gameObject.SetActive(true); return d; }
+        return null;
     }
 
     void FixedUpdate()
     {
-        if (pendulum == null || pendulum.PaintMass <= 0f) return;
+        if (pendulum == null) return;
 
-        spawnTimer += Time.fixedDeltaTime;
-        if (spawnTimer < spawnInterval) return;
-        spawnTimer = 0f;
-
-        SpawnDroplet();
+        if (sphSimulator != null)
+        {
+            // SPH mode: each particle that exits the bucket hole becomes a droplet
+            foreach (SPHParticle p in sphSimulator.DrainExitBuffer())
+                SpawnFromSPHParticle(p);
+        }
+        else
+        {
+            // Torricelli fallback: v_out = sqrt(2gh) * f(viscosity)
+            if (pendulum.PaintMass <= 0f) return;
+            spawnTimer += Time.fixedDeltaTime;
+            if (spawnTimer < spawnInterval) return;
+            spawnTimer = 0f;
+            SpawnDropletTorricelli();
+        }
     }
 
-    private void SpawnDroplet()
+    private void SpawnFromSPHParticle(SPHParticle particle)
     {
         PaintDroplet droplet = GetFromPool();
         if (droplet == null) return;
 
-        // Torricelli (modified): v_out = sqrt(2gh) * f(viscosity)
-        // h = paint fill height inside bucket (approximated from fill ratio)
-        float fillRatio = pendulum.PaintFillRatio;
-        float h = fillRatio * 0.2f;         // max 20cm fill height
+        Vector3 pos    = new Vector3(particle.position.x, particle.position.y, 0f);
+        Vector3 vel    = new Vector3(particle.velocity.x, particle.velocity.y, 0f);
+        float   radius = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
+
+        droplet.Launch(pos, vel, paintColor, radius, canvasPainter);
+    }
+
+    private void SpawnDropletTorricelli()
+    {
+        PaintDroplet droplet = GetFromPool();
+        if (droplet == null) return;
+
+        float fillRatio      = pendulum.PaintFillRatio;
+        float h              = fillRatio * 0.2f;
         float viscosityFactor = 1f / (1f + viscosity * 100f);
-        float exitSpeed = Mathf.Sqrt(2f * pendulum.gravity * h) * viscosityFactor * flowRateMultiplier;
+        float exitSpeed      = Mathf.Sqrt(2f * pendulum.gravity * h) * viscosityFactor * flowRateMultiplier;
 
         if (exitSpeed < 0.01f) return;
 
-        // Droplet inherits bucket's horizontal velocity + exit velocity downward
-        Vector3 bucketVel = pendulum.BucketVelocity;
+        Vector3 bucketVel      = pendulum.BucketVelocity;
         Vector3 dropletVelocity = new Vector3(bucketVel.x * 0.8f, -exitSpeed, bucketVel.z * 0.8f);
+        float   dropletRadius  = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
 
-        // Droplet size depends on viscosity: high viscosity = bigger drops
-        float dropletRadius = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
-
-        droplet.Launch(
-            pendulum.BucketPosition,
-            dropletVelocity,
-            paintColor,
-            dropletRadius,
-            canvasPainter);
+        droplet.Launch(pendulum.BucketPosition, dropletVelocity, paintColor, dropletRadius, canvasPainter);
     }
 
     public void SetColor(Color c) => paintColor = c;
     public void SetViscosity(float v) => viscosity = v;
     public void SetFlowRate(float rate) => flowRateMultiplier = rate;
 }
+
+
+

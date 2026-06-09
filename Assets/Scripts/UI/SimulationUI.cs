@@ -5,6 +5,7 @@ public class SimulationUI : MonoBehaviour
     public PendulumSimulator pendulum;
     public PaintFlowController flowController;
     public CanvasPainter canvasPainter;
+    public SPHSimulator sphSimulator;
 
     private float ropeLength   = 1.5f;
     private float initialAngle = 45f;
@@ -156,6 +157,7 @@ public class SimulationUI : MonoBehaviour
         flowController?.SetColor(new Color(r, g, b));
 
         pendulum.Initialize();
+        sphSimulator?.Initialize();
         pendulum.StartSimulation();
         isRunning = true;
     }
@@ -170,6 +172,7 @@ public class SimulationUI : MonoBehaviour
     {
         pendulum?.StopSimulation();
         pendulum?.ResetSimulation();
+        sphSimulator?.Initialize();
         isRunning = false;
     }
 

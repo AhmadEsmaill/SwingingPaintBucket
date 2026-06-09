@@ -45,6 +45,7 @@ public class PendulumSimulator : MonoBehaviour
     public float CurrentMass => bucketMass + currentPaintMass;
     public float PaintMass => currentPaintMass;
     public float PaintFillRatio => initialPaintMass > 0f ? currentPaintMass / initialPaintMass : 0f;
+    public bool  IsSimulating => isSimulating;
     public Vector3 BucketPosition { get; private set; }
     public Vector3 BucketVelocity { get; private set; }
 

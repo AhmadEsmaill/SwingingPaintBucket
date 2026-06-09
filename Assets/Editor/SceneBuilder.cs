@@ -95,6 +95,19 @@ public class SceneBuilder
         sim.initialPaintMass = 0.3f;
         sim.paintFlowRate    = 0.01f;
 
+        SPHSimulator sph = simManager.AddComponent<SPHSimulator>();
+        sph.pendulum              = sim;
+        sph.smoothingRadius       = 0.04f;
+        sph.restDensity           = 1000f;
+        sph.stiffness             = 200f;
+        sph.viscosityCoeff        = 0.08f;
+        sph.particleMass          = 0.02f;
+        sph.initialParticleCount  = 120;
+        sph.bucketWidth           = 0.15f;
+        sph.bucketHeight          = 0.20f;
+        sph.holeWidth             = 0.015f;
+        sph.wallRestitution       = 0.2f;
+
         PaintFlowController flow = simManager.AddComponent<PaintFlowController>();
         flow.pendulum      = sim;
         flow.canvasPainter = painter;
@@ -103,6 +116,7 @@ public class SceneBuilder
         flow.viscosity     = 0.01f;
         flow.holeRadius    = 0.005f;
         flow.poolSize      = 100;
+        flow.sphSimulator  = sph;
 
         // --- Camera ---
         GameObject camObj = new GameObject("MainCamera");
@@ -120,6 +134,7 @@ public class SceneBuilder
         ui.pendulum       = sim;
         ui.flowController = flow;
         ui.canvasPainter  = painter;
+        ui.sphSimulator   = sph;
 
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene());
