@@ -96,7 +96,7 @@ public class PaintFlowController : MonoBehaviour
         Vector3 dropletVelocity = new Vector3(bucketVel.x * 0.8f, -exitSpeed, bucketVel.z * 0.8f);
         float   dropletRadius  = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
 
-        droplet.Launch(pendulum.BucketPosition, dropletVelocity, paintColor, dropletRadius, canvasPainter);
+        droplet.Launch(pendulum.BucketCenter, dropletVelocity, paintColor, dropletRadius, canvasPainter);
     }
 
     public void SetColor(Color c) => paintColor = c;

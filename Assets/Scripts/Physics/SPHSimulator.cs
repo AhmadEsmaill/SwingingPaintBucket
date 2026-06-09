@@ -30,7 +30,7 @@ public class SPHSimulator : MonoBehaviour
     private float kPoly6, kSpikyGrad, kViscLap;
 
     private Vector2 BucketCenter =>
-        new Vector2(pendulum.BucketPosition.x, pendulum.BucketPosition.y);
+        new Vector2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
 
     void Start() => Initialize();
 

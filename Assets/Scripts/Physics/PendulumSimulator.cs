@@ -5,6 +5,7 @@ public class PendulumSimulator : MonoBehaviour
     [Header("Bucket Properties")]
     public float bucketMass = 0.5f;
     public float bucketRadius = 0.1f;
+    public float bucketHalfHeight = 0.2f;  // half the visual bucket height (world units)
 
     [Header("Rope Properties")]
     public float ropeLength = 1.5f;
@@ -40,14 +41,19 @@ public class PendulumSimulator : MonoBehaviour
     private bool isSimulating;
 
     // Public read-only properties used by PaintFlowController and others
-    public float Theta => theta;
-    public float AngularVelocity => thetaDot;
-    public float CurrentMass => bucketMass + currentPaintMass;
-    public float PaintMass => currentPaintMass;
-    public float PaintFillRatio => initialPaintMass > 0f ? currentPaintMass / initialPaintMass : 0f;
-    public bool  IsSimulating => isSimulating;
-    public Vector3 BucketPosition { get; private set; }
-    public Vector3 BucketVelocity { get; private set; }
+    public float   Theta           => theta;
+    public float   AngularVelocity => thetaDot;
+    public float   CurrentMass     => bucketMass + currentPaintMass;
+    public float   PaintMass       => currentPaintMass;
+    public float   PaintFillRatio  => initialPaintMass > 0f ? currentPaintMass / initialPaintMass : 0f;
+    public bool    IsSimulating    => isSimulating;
+    // Rope attachment point (top of bucket)
+    public Vector3 BucketPosition  { get; private set; }
+    // Visual center of bucket: half-height further along the rope direction
+    public Vector3 BucketCenter    => BucketPosition
+                                    + new Vector3(Mathf.Sin(theta), -Mathf.Cos(theta), 0f)
+                                    * bucketHalfHeight;
+    public Vector3 BucketVelocity  { get; private set; }
 
     void Start()
     {
@@ -143,7 +149,7 @@ public class PendulumSimulator : MonoBehaviour
     {
         if (pivotPoint == null) return;
 
-        // Swing in the XY plane: X = L sin(θ), Y = -L cos(θ)
+        // Rope tip (= top of bucket)
         Vector3 offset = new Vector3(
             ropeLength * Mathf.Sin(theta),
             -ropeLength * Mathf.Cos(theta),
@@ -152,7 +158,12 @@ public class PendulumSimulator : MonoBehaviour
         BucketPosition = pivotPoint.position + offset;
 
         if (bucketTransform != null)
-            bucketTransform.position = BucketPosition;
+        {
+            // Visual center sits half-height below the attachment point
+            bucketTransform.position = BucketCenter;
+            // Align bucket axis with the rope: local Y points back toward pivot
+            bucketTransform.rotation = Quaternion.Euler(0f, 0f, theta * Mathf.Rad2Deg);
+        }
     }
 
     private void UpdateRopeRenderer()

@@ -83,17 +83,18 @@ public class SceneBuilder
         GameObject simManager = new GameObject("SimManager");
 
         PendulumSimulator sim = simManager.AddComponent<PendulumSimulator>();
-        sim.pivotPoint       = pivot.transform;
-        sim.bucketTransform  = bucket.transform;
-        sim.ropeRenderer     = rope;
-        sim.bucketMass       = 0.5f;
-        sim.bucketRadius     = 0.15f;
-        sim.ropeLength       = 1.5f;
-        sim.dampingCoeff     = 0.05f;
-        sim.initialAngleDeg  = 45f;
-        sim.gravity          = 9.81f;
-        sim.initialPaintMass = 0.3f;
-        sim.paintFlowRate    = 0.01f;
+        sim.pivotPoint        = pivot.transform;
+        sim.bucketTransform   = bucket.transform;
+        sim.ropeRenderer      = rope;
+        sim.bucketMass        = 0.5f;
+        sim.bucketRadius      = 0.15f;
+        sim.bucketHalfHeight  = 0.2f;   // cylinder localScale.y=0.2 × unity height 2 ÷ 2 = 0.2
+        sim.ropeLength        = 1.5f;
+        sim.dampingCoeff      = 0.05f;
+        sim.initialAngleDeg   = 45f;
+        sim.gravity           = 9.81f;
+        sim.initialPaintMass  = 0.3f;
+        sim.paintFlowRate     = 0.01f;
 
         SPHSimulator sph = simManager.AddComponent<SPHSimulator>();
         sph.pendulum              = sim;
