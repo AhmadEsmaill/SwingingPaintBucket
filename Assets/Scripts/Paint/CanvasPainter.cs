@@ -3,26 +3,43 @@ using UnityEngine;
 public class CanvasPainter : MonoBehaviour
 {
     [Header("Canvas Settings")]
-    public int textureWidth = 1024;
-    public int textureHeight = 1024;
-    public float canvasWorldWidth = 4f;
+    public int   textureWidth      = 1024;
+    public int   textureHeight     = 1024;
+    public float canvasWorldWidth  = 4f;
     public float canvasWorldHeight = 4f;
 
     [Header("Surface Type")]
     public SurfaceType surfaceType = SurfaceType.Canvas;
+
     public enum SurfaceType { Canvas, Metal, Paper, Wood }
 
-    private Texture2D paintTexture;
-    private Renderer  canvasRenderer;
+    // Per-surface properties ─────────────────────────────────────────────────
+    // absorption : how opaque each new layer is (higher = paint sticks more)
+    // spotScale  : multiplier on the base spot radius
+    // background : the surface colour before any paint
 
-    // Stroke continuity — connects consecutive close hits into smooth brush strokes
+    static readonly float[] Absorption  = { 0.45f, 0.18f, 0.72f, 0.33f };
+    static readonly float[] SpotScale   = { 1.00f, 0.60f, 1.45f, 1.00f };
+    static readonly Color[] Background  =
+    {
+        new Color(1.00f, 1.00f, 1.00f),          // Canvas  — white
+        new Color(0.52f, 0.54f, 0.56f),          // Metal   — steel grey
+        new Color(0.98f, 0.95f, 0.88f),          // Paper   — warm cream
+        new Color(0.68f, 0.52f, 0.33f),          // Wood    — warm brown
+    };
+
+    private Texture2D  paintTexture;
+    private Renderer   canvasRenderer;
+
+    // Stroke continuity
     private Vector3 lastPaintWorld;
     private float   lastPaintTime   = -1f;
-    private const float maxStrokeGap     = 0.07f;  // world-space max gap to bridge (m)
-    private const float strokeTimeWindow = 0.12f;  // max seconds between linked hits
+    private const float maxStrokeGap     = 0.07f;
+    private const float strokeTimeWindow = 0.12f;
 
-    // Batched Apply: collect all SetPixel calls in a frame, apply once in LateUpdate
     private bool pendingApply;
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     void Start()
     {
@@ -32,24 +49,33 @@ public class CanvasPainter : MonoBehaviour
 
     void LateUpdate()
     {
-        if (pendingApply)
-        {
-            paintTexture.Apply();
-            pendingApply = false;
-        }
+        if (pendingApply) { paintTexture.Apply(); pendingApply = false; }
     }
 
     private void InitTexture()
     {
         paintTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
-        Color[] pixels = new Color[textureWidth * textureHeight];
-        for (int i = 0; i < pixels.Length; i++) pixels[i] = Color.white;
-        paintTexture.SetPixels(pixels);
+        Color bg     = Background[(int)surfaceType];
+        Color[] px   = new Color[textureWidth * textureHeight];
+        for (int i = 0; i < px.Length; i++) px[i] = bg;
+        paintTexture.SetPixels(px);
         paintTexture.Apply();
-        canvasRenderer.material.mainTexture = paintTexture;
+        if (canvasRenderer != null)
+            canvasRenderer.material.mainTexture = paintTexture;
     }
 
-    public void PaintAt(Vector3 worldPosition, Color color, float dropletRadius, Vector3 impactVelocity)
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    // Change surface type; clears canvas so the background colour takes effect.
+    public void SetSurfaceType(SurfaceType type)
+    {
+        surfaceType   = type;
+        lastPaintTime = -1f;
+        InitTexture();
+    }
+
+    public void PaintAt(Vector3 worldPosition, Color color, float dropletRadius,
+                        Vector3 impactVelocity)
     {
         Vector2 uv = WorldToUV(worldPosition);
         if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1)
@@ -61,33 +87,43 @@ public class CanvasPainter : MonoBehaviour
         float pixelsPerMeter = textureWidth / canvasWorldWidth;
         int   cx    = Mathf.RoundToInt(uv.x * textureWidth);
         int   cy    = Mathf.RoundToInt(uv.y * textureHeight);
-        int   baseR = Mathf.Max(1, Mathf.RoundToInt(dropletRadius * pixelsPerMeter * 2f));
+
+        // Surface-specific spot size
+        int   baseR = Mathf.Max(1,
+                Mathf.RoundToInt(dropletRadius * pixelsPerMeter * 2f
+                                 * SpotScale[(int)surfaceType]));
 
         float hx     = impactVelocity.x;
         float hz     = impactVelocity.z;
         float hSpeed = Mathf.Sqrt(hx * hx + hz * hz);
         float vSpeed = Mathf.Abs(impactVelocity.y) + 0.01f;
-        float elongation = Mathf.Clamp(1f + (hSpeed / vSpeed) * 0.8f, 1f, 2.5f);
+
+        // Wood adds a subtle grain elongation along the X axis
+        float grainBoost = (surfaceType == SurfaceType.Wood) ? 1.25f : 1f;
+        float elongation = Mathf.Clamp(1f + (hSpeed / vSpeed) * 0.8f, 1f, 2.5f) * grainBoost;
+
         int   ra    = Mathf.RoundToInt(baseR * elongation);
         int   rb    = baseR;
-        float angle = hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f;
-        float absorption = GetAbsorption();
+        float angle = (surfaceType == SurfaceType.Wood)
+                      ? 0f                              // grain always horizontal
+                      : (hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f);
+
+        float absorption = Absorption[(int)surfaceType];
 
         // ── Stroke interpolation ────────────────────────────────────────────
-        // If the previous hit was close in both space and time, fill the gap
-        // between the two positions so the paint forms a continuous stroke.
         float now = Time.time;
         if (lastPaintTime > 0f && (now - lastPaintTime) < strokeTimeWindow)
         {
             float worldDist = Vector3.Distance(worldPosition, lastPaintWorld);
             if (worldDist < maxStrokeGap)
             {
-                Vector2 prevUV = WorldToUV(lastPaintWorld);
+                Vector2 prevUV  = WorldToUV(lastPaintWorld);
                 float   prevCxF = prevUV.x * textureWidth;
                 float   prevCyF = prevUV.y * textureHeight;
                 float   pixDist = Vector2.Distance(new Vector2(prevCxF, prevCyF),
                                                     new Vector2(cx, cy));
-                int steps = Mathf.Max(1, Mathf.RoundToInt(pixDist / Mathf.Max(1, baseR * 0.5f)));
+                int     steps   = Mathf.Max(1,
+                    Mathf.RoundToInt(pixDist / Mathf.Max(1, baseR * 0.5f)));
                 float strokeAngle = Mathf.Atan2(cy - prevCyF, cx - prevCxF);
                 int   srA = Mathf.Max(1, Mathf.RoundToInt(ra * 0.85f));
                 int   srB = Mathf.Max(1, Mathf.RoundToInt(rb * 0.85f));
@@ -104,28 +140,46 @@ public class CanvasPainter : MonoBehaviour
         // ── Main splat ──────────────────────────────────────────────────────
         PaintEllipse(cx, cy, ra, rb, angle, color, absorption);
 
-        // Micro-splatters only at genuinely high impact speeds
-        float impactSpeed = impactVelocity.magnitude;
-        if (impactSpeed > 5f && rb > 2)
+        // Metal: paint beads — add tiny raised satellite dots nearby
+        if (surfaceType == SurfaceType.Metal && rb > 1)
         {
-            int splatterCount = Mathf.Min(4, Mathf.RoundToInt((impactSpeed - 5f) * 1.5f));
-            for (int i = 0; i < splatterCount; i++)
+            int beads = Random.Range(2, 5);
+            for (int i = 0; i < beads; i++)
+            {
+                float d    = Random.Range(ra * 1.2f, ra * 2.0f);
+                float a    = Random.Range(0f, Mathf.PI * 2f);
+                int   bx   = Mathf.Clamp(cx + Mathf.RoundToInt(d * Mathf.Cos(a)), 0, textureWidth  - 1);
+                int   by   = Mathf.Clamp(cy + Mathf.RoundToInt(d * Mathf.Sin(a)), 0, textureHeight - 1);
+                int   br   = Mathf.Max(1, rb / 3);
+                PaintEllipse(bx, by, br, br, 0f, color, absorption * 0.7f);
+            }
+        }
+
+        // High-speed micro-splatters (all surfaces except Metal where paint beads)
+        float impactSpeed = impactVelocity.magnitude;
+        if (impactSpeed > 5f && rb > 2 && surfaceType != SurfaceType.Metal)
+        {
+            int splats = Mathf.Min(4, Mathf.RoundToInt((impactSpeed - 5f) * 1.5f));
+            for (int i = 0; i < splats; i++)
             {
                 float dist  = Random.Range(ra * 1.5f, ra * 2.5f);
                 float sAngl = Random.Range(0f, Mathf.PI * 2f);
                 int   sx    = Mathf.Clamp(cx + Mathf.RoundToInt(dist * Mathf.Cos(sAngl)), 0, textureWidth  - 1);
                 int   sy    = Mathf.Clamp(cy + Mathf.RoundToInt(dist * Mathf.Sin(sAngl)), 0, textureHeight - 1);
-                PaintEllipse(sx, sy, Mathf.Max(1, rb / 4), Mathf.Max(1, rb / 4), 0f, color, absorption * 0.4f);
+                PaintEllipse(sx, sy, Mathf.Max(1, rb / 4), Mathf.Max(1, rb / 4), 0f, color,
+                             absorption * 0.4f);
             }
         }
 
-        // Mark texture dirty — Apply() called once per frame in LateUpdate
-        pendingApply    = true;
-        lastPaintWorld  = worldPosition;
-        lastPaintTime   = now;
+        pendingApply   = true;
+        lastPaintWorld = worldPosition;
+        lastPaintTime  = now;
     }
 
-    private void PaintEllipse(int cx, int cy, int ra, int rb, float angle, Color color, float absorption)
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private void PaintEllipse(int cx, int cy, int ra, int rb, float angle,
+                               Color color, float absorption)
     {
         float cosA = Mathf.Cos(angle);
         float sinA = Mathf.Sin(angle);
@@ -142,21 +196,9 @@ public class CanvasPainter : MonoBehaviour
             float d  = (ex * ex) / (float)(ra * ra) + (ey * ey) / (float)(rb * rb);
             if (d > 1f) continue;
 
-            float alpha   = (1f - Mathf.Sqrt(d)) * absorption;
+            float alpha    = (1f - Mathf.Sqrt(d)) * absorption;
             Color existing = paintTexture.GetPixel(px, py);
             paintTexture.SetPixel(px, py, Color.Lerp(existing, color, alpha));
-        }
-    }
-
-    private float GetAbsorption()
-    {
-        switch (surfaceType)
-        {
-            case SurfaceType.Canvas: return 0.45f;
-            case SurfaceType.Metal:  return 0.25f;
-            case SurfaceType.Paper:  return 0.55f;
-            case SurfaceType.Wood:   return 0.35f;
-            default: return 0.40f;
         }
     }
 

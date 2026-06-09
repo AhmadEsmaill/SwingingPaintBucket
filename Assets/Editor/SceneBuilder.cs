@@ -72,7 +72,8 @@ public class SceneBuilder
         dropletObj.transform.localScale = Vector3.one * 0.03f;
         Object.DestroyImmediate(dropletObj.GetComponent<Collider>());
 
-        Material dropletMat = new Material(Shader.Find("Standard"));
+        // Unlit so the droplet's colour in the air matches exactly what it paints on canvas
+        Material dropletMat = new Material(Shader.Find("Unlit/Color"));
         dropletMat.color = Color.red;
         dropletObj.GetComponent<Renderer>().sharedMaterial = dropletMat;
 

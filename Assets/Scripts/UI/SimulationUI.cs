@@ -183,8 +183,7 @@ public class SimulationUI : MonoBehaviour
             if (GUILayout.Button(label, style, GUILayout.Height(26)))
             {
                 selectedSurfaceIdx = i;
-                if (canvasPainter != null)
-                    canvasPainter.surfaceType = (CanvasPainter.SurfaceType)selectedSurfaceIdx;
+                canvasPainter?.SetSurfaceType((CanvasPainter.SurfaceType)i);
             }
         }
 

@@ -56,6 +56,7 @@ public class PendulumSimulator : MonoBehaviour
     // Visual center: half-height further along the rope direction
     public Vector3 BucketCenter    => BucketPosition + ropeDirection * bucketHalfHeight;
     public Vector3 BucketVelocity  { get; private set; }
+    public Vector3 RopeDirection   => ropeDirection;
 
     void Start()
     {

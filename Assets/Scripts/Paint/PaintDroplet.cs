@@ -15,6 +15,10 @@ public class PaintDroplet : MonoBehaviour
     public void Launch(Vector3 startPosition, Vector3 initialVelocity, Color paintColor,
                        float dropletRadius, CanvasPainter painter)
     {
+        // Pause trail BEFORE moving — prevents a streak from the old position to the new one
+        var trail = GetComponent<TrailRenderer>();
+        if (trail != null) trail.emitting = false;
+
         transform.position = startPosition;
         velocity      = initialVelocity;
         color         = paintColor;
@@ -26,8 +30,6 @@ public class PaintDroplet : MonoBehaviour
         transform.localScale = Vector3.one * radius * 2f;
         GetComponent<Renderer>().material.color = color;
 
-        // Configure paint stream trail
-        var trail = GetComponent<TrailRenderer>();
         if (trail != null)
         {
             trail.startColor = new Color(paintColor.r, paintColor.g, paintColor.b, 0.85f);
@@ -35,6 +37,7 @@ public class PaintDroplet : MonoBehaviour
             trail.startWidth = radius * 2.5f;
             trail.endWidth   = 0f;
             trail.Clear();
+            trail.emitting   = true;   // Resume recording from the correct position
         }
     }
 
@@ -71,7 +74,11 @@ public class PaintDroplet : MonoBehaviour
     {
         isActive = false;
         var trail = GetComponent<TrailRenderer>();
-        if (trail != null) trail.Clear();
+        if (trail != null)
+        {
+            trail.emitting = false;   // Stop recording before deactivating
+            trail.Clear();
+        }
         gameObject.SetActive(false);
     }
 }

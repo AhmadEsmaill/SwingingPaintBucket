@@ -143,22 +143,36 @@ public class SPHSimulator : MonoBehaviour
 
     // ── Spawn ─────────────────────────────────────────────────────────────────
 
+    // Returns the bucket's normalised local axes projected onto the world XY plane.
+    // axisY points from the bucket top toward the bucket bottom (along rope direction).
+    // axisX is perpendicular to axisY in 2D.
+    static void GetBucketAxes(PendulumSimulator p, out float2 axisX, out float2 axisY)
+    {
+        Vector3 rd   = p.RopeDirection;
+        float2  raw  = new float2(rd.x, rd.y);
+        float   len  = math.length(raw);
+        axisY = len > 0.001f ? raw / len : new float2(0f, -1f);
+        axisX = new float2(-axisY.y, axisY.x);
+    }
+
     void SpawnParticles()
     {
         if (pendulum == null) return;
 
-        float2 c      = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
-        float  sp     = smoothingRadius * 0.75f;
-        int    cols   = math.max(1, (int)(bucketWidth / sp));
-        float  startX = c.x - (cols - 1) * sp * 0.5f;
-        float  startY = c.y - bucketHeight * 0.5f + sp;
+        GetBucketAxes(pendulum, out float2 axisX, out float2 axisY);
+
+        float2 c       = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
+        float  sp      = smoothingRadius * 0.75f;
+        int    cols    = math.max(1, (int)(bucketWidth / sp));
+        float  startLX = -(cols - 1) * sp * 0.5f;
+        float  startLY = -bucketHeight * 0.5f + sp;
 
         for (int i = 0; i < n; i++)
         {
             int   col = i % cols, row = i / cols;
-            float jx  = UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
-            float jy  = UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
-            positions[i]  = new float2(startX + col * sp + jx, startY + row * sp + jy);
+            float lx  = startLX + col * sp + UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
+            float ly  = startLY + row * sp + UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
+            positions[i]  = c + axisX * lx + axisY * ly;
             velocities[i] = float2.zero;
         }
     }
@@ -219,6 +233,9 @@ public class SPHSimulator : MonoBehaviour
             dt            = dt
         }.Schedule(n, 64, jForce);
 
+        // Bucket local axes (rope-aligned, projected onto world XY)
+        GetBucketAxes(pendulum, out float2 axisX, out float2 axisY);
+
         // Boundary enforcement + exit detection + particle recycling
         var jBound = new BoundaryExitJob {
             positions     = positions,
@@ -227,6 +244,8 @@ public class SPHSimulator : MonoBehaviour
             exitPos       = exitPos,
             exitVel       = exitVel,
             center        = center,
+            axisX         = axisX,
+            axisY         = axisY,
             halfW         = bucketWidth  * 0.5f,
             halfH         = bucketHeight * 0.5f,
             halfHole      = holeWidth    * 0.5f,
@@ -370,8 +389,8 @@ public class SPHSimulator : MonoBehaviour
         }
     }
 
-    // Enforces bucket walls, detects exits, and recycles exited particles to the
-    // top of the bucket so the total particle count stays constant (infinite paint).
+    // Enforces bucket walls in the bucket's LOCAL frame (rope-aligned),
+    // detects exits through the bottom-centre hole, and recycles exited particles.
     [BurstCompile]
     struct BoundaryExitJob : IJobParallelFor
     {
@@ -381,44 +400,55 @@ public class SPHSimulator : MonoBehaviour
         [WriteOnly] public NativeArray<float2> exitPos;
         [WriteOnly] public NativeArray<float2> exitVel;
         public float2 center;
+        public float2 axisX;        // perpendicular to rope, in world XY
+        public float2 axisY;        // along rope, top → bottom of bucket
         public float  halfW, halfH, halfHole, wallRestitution;
 
         public void Execute(int i)
         {
-            float2 p      = positions[i];
-            float2 v      = velocities[i];
-            float  bottom = center.y - halfH;
-            exitFlags[i]  = 0;
+            float2 p = positions[i];
+            float2 v = velocities[i];
+            exitFlags[i] = 0;
 
-            // Left / right walls
-            if (p.x < center.x - halfW) { p.x = center.x - halfW; v.x =  math.abs(v.x) * wallRestitution; }
-            if (p.x > center.x + halfW) { p.x = center.x + halfW; v.x = -math.abs(v.x) * wallRestitution; }
-            // Top rim
-            if (p.y > center.y + halfH) { p.y = center.y + halfH; v.y = -math.abs(v.y) * wallRestitution; }
-            // Bottom: solid except at hole
-            if (p.y < bottom)
+            // ── Project into bucket-local frame ───────────────────────────
+            float2 offset = p - center;
+            float  lx = math.dot(offset, axisX);   // ±halfW
+            float  ly = math.dot(offset, axisY);   // -halfH (top) … +halfH (bottom)
+            float  vx = math.dot(v, axisX);
+            float  vy = math.dot(v, axisY);
+
+            // Left wall
+            if (lx < -halfW) { lx = -halfW; vx =  math.abs(vx) * wallRestitution; }
+            // Right wall
+            if (lx >  halfW) { lx =  halfW; vx = -math.abs(vx) * wallRestitution; }
+            // Top rim (paint cannot overflow)
+            if (ly < -halfH) { ly = -halfH; vy =  math.abs(vy) * wallRestitution; }
+            // Bottom: solid except at centre hole
+            if (ly > halfH)
             {
-                bool inHole = math.abs(p.x - center.x) < halfHole;
-                if (inHole && p.y < bottom - 0.002f)
+                bool inHole = math.abs(lx) < halfHole;
+                if (inHole && ly > halfH + 0.002f)
                 {
-                    // Record exit data before recycling
+                    // Exit through hole — record world-space data then recycle
                     exitFlags[i] = 1;
                     exitPos[i]   = p;
                     exitVel[i]   = v;
-                    // Recycle to top of bucket with deterministic X spread by index
                     float rx = ((i % 17) / 17f - 0.5f) * halfW * 0.6f;
-                    p = new float2(center.x + rx, center.y + halfH * 0.3f);
-                    v = float2.zero;
+                    lx = rx;
+                    ly = -halfH * 0.3f;
+                    vx = 0f;
+                    vy = 0f;
                 }
                 else if (!inHole)
                 {
-                    p.y = bottom;
-                    v.y = math.abs(v.y) * wallRestitution;
+                    ly = halfH;
+                    vy = -math.abs(vy) * wallRestitution;
                 }
             }
 
-            positions[i]  = p;
-            velocities[i] = v;
+            // ── Transform back to world space ─────────────────────────────
+            positions[i]  = center + axisX * lx + axisY * ly;
+            velocities[i] = axisX  * vx  + axisY * vy;
         }
     }
 }
