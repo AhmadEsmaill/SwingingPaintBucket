@@ -60,7 +60,7 @@ public class PaintFlowController : MonoBehaviour
         else
         {
             // Torricelli fallback: v_out = sqrt(2gh) * f(viscosity)
-            if (pendulum.PaintMass <= 0f) return;
+            if (!pendulum.IsSimulating || pendulum.PaintMass <= 0f) return;
             spawnTimer += Time.fixedDeltaTime;
             if (spawnTimer < spawnInterval) return;
             spawnTimer = 0f;
@@ -73,9 +73,12 @@ public class PaintFlowController : MonoBehaviour
         PaintDroplet droplet = GetFromPool();
         if (droplet == null) return;
 
-        Vector3 pos    = new Vector3(particle.position.x, particle.position.y, 0f);
-        Vector3 vel    = new Vector3(particle.velocity.x, particle.velocity.y, 0f);
-        float   radius = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
+        Vector3 pos = new Vector3(particle.position.x, particle.position.y, pendulum.BucketCenter.z);
+        Vector3 vel = new Vector3(
+            particle.velocity.x,
+            particle.velocity.y,
+            pendulum.BucketVelocity.z * 0.8f);
+        float radius = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
 
         droplet.Launch(pos, vel, paintColor, radius, canvasPainter);
     }
@@ -85,18 +88,18 @@ public class PaintFlowController : MonoBehaviour
         PaintDroplet droplet = GetFromPool();
         if (droplet == null) return;
 
-        float fillRatio      = pendulum.PaintFillRatio;
-        float h              = fillRatio * 0.2f;
+        float fillRatio       = pendulum.PaintFillRatio;
+        float h               = fillRatio * 0.2f;
         float viscosityFactor = 1f / (1f + viscosity * 100f);
-        float exitSpeed      = Mathf.Sqrt(2f * pendulum.gravity * h) * viscosityFactor * flowRateMultiplier;
+        float exitSpeed       = Mathf.Sqrt(2f * pendulum.gravity * h) * viscosityFactor * flowRateMultiplier;
 
         if (exitSpeed < 0.01f) return;
 
-        Vector3 bucketVel      = pendulum.BucketVelocity;
-        Vector3 dropletVelocity = new Vector3(bucketVel.x * 0.8f, -exitSpeed, bucketVel.z * 0.8f);
-        float   dropletRadius  = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
+        Vector3 bucketVel = pendulum.BucketVelocity;
+        Vector3 vel = new Vector3(bucketVel.x * 0.8f, -exitSpeed, bucketVel.z * 0.8f);
+        float dropletRadius = Mathf.Lerp(0.01f, 0.04f, Mathf.Clamp01(viscosity * 10f));
 
-        droplet.Launch(pendulum.BucketCenter, dropletVelocity, paintColor, dropletRadius, canvasPainter);
+        droplet.Launch(pendulum.BucketCenter, vel, paintColor, dropletRadius, canvasPainter);
     }
 
     public void SetColor(Color c) => paintColor = c;

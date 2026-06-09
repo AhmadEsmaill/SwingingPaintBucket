@@ -14,6 +14,7 @@ public class PendulumSimulator : MonoBehaviour
     [Header("Motion Properties")]
     public float initialAngleDeg = 45f;
     public float initialAngularVelocity = 0f;
+    public float initialAngleDegZ = 15f;   // Z-axis initial angle for 2D floor patterns
 
     [Header("Initial Force")]
     public float initialForceMagnitude = 0f;   // Newtons
@@ -37,8 +38,11 @@ public class PendulumSimulator : MonoBehaviour
     // Current state
     private float theta;
     private float thetaDot;
+    private float thetaZ;       // Z-axis swing angle
+    private float thetaZDot;
     private float currentPaintMass;
     private bool isSimulating;
+    private Vector3 ropeDirection = Vector3.down;  // cached unit vector from pivot to bucket
 
     // Public read-only properties used by PaintFlowController and others
     public float   Theta           => theta;
@@ -49,10 +53,8 @@ public class PendulumSimulator : MonoBehaviour
     public bool    IsSimulating    => isSimulating;
     // Rope attachment point (top of bucket)
     public Vector3 BucketPosition  { get; private set; }
-    // Visual center of bucket: half-height further along the rope direction
-    public Vector3 BucketCenter    => BucketPosition
-                                    + new Vector3(Mathf.Sin(theta), -Mathf.Cos(theta), 0f)
-                                    * bucketHalfHeight;
+    // Visual center: half-height further along the rope direction
+    public Vector3 BucketCenter    => BucketPosition + ropeDirection * bucketHalfHeight;
     public Vector3 BucketVelocity  { get; private set; }
 
     void Start()
@@ -62,17 +64,18 @@ public class PendulumSimulator : MonoBehaviour
 
     public void Initialize()
     {
-        theta = initialAngleDeg * Mathf.Deg2Rad;
+        theta    = initialAngleDeg  * Mathf.Deg2Rad;
+        thetaZ   = initialAngleDegZ * Mathf.Deg2Rad;
+        thetaZDot = 0f;
         currentPaintMass = initialPaintMass;
         isSimulating = false;
 
-        // Convert initial force impulse to angular velocity: ω = F_tangential / (m·L)
-        float forceRad = initialForceAngle * Mathf.Deg2Rad;
+        float forceRad   = initialForceAngle * Mathf.Deg2Rad;
         float tangential = initialForceMagnitude * Mathf.Cos(forceRad - theta);
         thetaDot = initialAngularVelocity + tangential / (CurrentMass * ropeLength);
 
         UpdateBucketTransform();
-        UpdateRopeRenderer();   // show rope at rest before simulation starts
+        UpdateRopeRenderer();
     }
 
     public void StartSimulation() => isSimulating = true;
@@ -95,12 +98,12 @@ public class PendulumSimulator : MonoBehaviour
 
         Vector3 prevPos = BucketPosition;
         RK4Step(dt);
+        RK4StepZ(dt);
         UpdateBucketTransform();
         BucketVelocity = (BucketPosition - prevPos) / dt;
     }
 
-    // Runge-Kutta 4th order integration
-    // State vector: [theta, thetaDot]
+    // RK4 for X-swing
     private void RK4Step(float dt)
     {
         float m = CurrentMass;
@@ -119,6 +122,27 @@ public class PendulumSimulator : MonoBehaviour
 
         theta    += (dt / 6f) * (k1_t + 2f * k2_t + 2f * k3_t + k4_t);
         thetaDot += (dt / 6f) * (k1_w + 2f * k2_w + 2f * k3_w + k4_w);
+    }
+
+    // RK4 for Z-swing — reuses the same ODE (decoupled planar oscillation)
+    private void RK4StepZ(float dt)
+    {
+        float m = CurrentMass;
+
+        float k1_t = thetaZDot;
+        float k1_w = AngularAcceleration(thetaZ, thetaZDot, m);
+
+        float k2_t = thetaZDot + 0.5f * dt * k1_w;
+        float k2_w = AngularAcceleration(thetaZ + 0.5f * dt * k1_t, thetaZDot + 0.5f * dt * k1_w, m);
+
+        float k3_t = thetaZDot + 0.5f * dt * k2_w;
+        float k3_w = AngularAcceleration(thetaZ + 0.5f * dt * k2_t, thetaZDot + 0.5f * dt * k2_w, m);
+
+        float k4_t = thetaZDot + dt * k3_w;
+        float k4_w = AngularAcceleration(thetaZ + dt * k3_t, thetaZDot + dt * k3_w, m);
+
+        thetaZ    += (dt / 6f) * (k1_t + 2f * k2_t + 2f * k3_t + k4_t);
+        thetaZDot += (dt / 6f) * (k1_w + 2f * k2_w + 2f * k3_w + k4_w);
     }
 
     // d²θ/dt² from the full pendulum ODE with damping and air drag
@@ -149,20 +173,23 @@ public class PendulumSimulator : MonoBehaviour
     {
         if (pivotPoint == null) return;
 
-        // Rope tip (= top of bucket)
-        Vector3 offset = new Vector3(
-            ropeLength * Mathf.Sin(theta),
-            -ropeLength * Mathf.Cos(theta),
-            0f);
+        // 3-D spherical pendulum position: stays on a sphere of radius L
+        float sinX  = Mathf.Sin(theta);
+        float sinZ  = Mathf.Sin(thetaZ);
+        float cosY  = Mathf.Sqrt(Mathf.Max(0f, 1f - sinX * sinX - sinZ * sinZ));
 
-        BucketPosition = pivotPoint.position + offset;
+        BucketPosition = pivotPoint.position + new Vector3(
+            ropeLength * sinX,
+            -ropeLength * cosY,
+            ropeLength * sinZ);
+
+        ropeDirection = (BucketPosition - pivotPoint.position).normalized;
 
         if (bucketTransform != null)
         {
-            // Visual center sits half-height below the attachment point
             bucketTransform.position = BucketCenter;
-            // Align bucket axis with the rope: local Y points back toward pivot
-            bucketTransform.rotation = Quaternion.Euler(0f, 0f, theta * Mathf.Rad2Deg);
+            // Bucket local-Y aligns with the rope toward the pivot
+            bucketTransform.rotation = Quaternion.FromToRotation(Vector3.up, -ropeDirection);
         }
     }
 

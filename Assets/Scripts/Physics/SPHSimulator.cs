@@ -1,245 +1,253 @@
 using UnityEngine;
+using Unity.Jobs;
+using Unity.Collections;
+using Unity.Mathematics;
+using Unity.Burst;
 using System.Collections.Generic;
 
-// 2-D SPH fluid (Müller et al. 2003) simulating paint inside the swinging bucket.
-// Particles live in world-space XY; bucket walls move each frame with the pendulum.
+// SPH fluid simulation (Müller 2003) using Unity Job System + Burst.
+// All particle data is stored in NativeArrays (no GC); all phases run as
+// parallel Burst-compiled jobs across available CPU cores.
+// Auto-calibration: h and ρ₀ are derived from particle count + bucket area,
+// so the simulation stays physically stable at any particle count.
 public class SPHSimulator : MonoBehaviour
 {
     [Header("SPH Parameters")]
-    public float smoothingRadius      = 0.04f;   // h — kernel support radius (m)
-    public float restDensity          = 1000f;   // ρ₀ (kg/m³)
     public float stiffness            = 200f;    // k — pressure constant
-    public float viscosityCoeff       = 0.08f;   // μ — dynamic viscosity
-    public float particleMass         = 0.02f;   // mass per SPH particle (kg)
-    public int   initialParticleCount = 120;
+    public float viscosityCoeff       = 0.02f;   // μ — dynamic viscosity
+    public float particleMass         = 0.005f;  // mass per particle (kg)
+    public int   initialParticleCount = 5000;
+
+    [Header("Auto-calibrated (do not set manually)")]
+    public float smoothingRadius;   // h — set by AutoCalibrate()
+    public float restDensity;       // ρ₀ — set by AutoCalibrate()
 
     [Header("Bucket Geometry")]
-    public float bucketWidth    = 0.15f;   // interior width  (m)
-    public float bucketHeight   = 0.20f;   // interior height (m)
-    public float holeWidth      = 0.015f;  // exit hole width at bucket bottom (m)
-    public float wallRestitution = 0.2f;   // velocity kept after wall bounce
+    public float bucketWidth    = 0.15f;
+    public float bucketHeight   = 0.20f;
+    public float holeWidth      = 0.05f;
+    public float wallRestitution = 0.2f;
 
     [Header("References")]
     public PendulumSimulator pendulum;
 
-    private readonly List<SPHParticle> particles  = new List<SPHParticle>();
-    private readonly List<SPHParticle> exitBuffer = new List<SPHParticle>();
+    // Particle data — Struct-of-Arrays layout for cache efficiency
+    NativeArray<float2> positions;
+    NativeArray<float2> velocities;
+    NativeArray<float2> accelerations;
+    NativeArray<float>  densities;
+    NativeArray<float>  pressures;
 
-    // Precomputed kernel constants (Müller 2003)
-    private float h2, h6, h9;
-    private float kPoly6, kSpikyGrad, kViscLap;
+    // Exit detection (written per-particle each frame)
+    NativeArray<int>    exitFlags;   // 1 = exited through hole this frame
+    NativeArray<float2> exitPos;     // world position at exit moment
+    NativeArray<float2> exitVel;     // velocity at exit moment
 
-    private Vector2 BucketCenter =>
-        new Vector2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
+    // Spatial hash: cell key → particle indices
+    NativeParallelMultiHashMap<int, int> hashGrid;
 
-    void Start() => Initialize();
+    int n;  // total particle count (constant after Initialize)
 
-    // Call this whenever the simulation is reset so particles re-spawn inside the bucket.
+    // Kernel constants (precomputed from h)
+    float h2, h6, h9, kPoly6, kSpikyGrad, kViscLap, invCellSize;
+
+    readonly List<SPHParticle> exitBuffer = new List<SPHParticle>();
+
+    private bool isSimulating = false;
+
+    // Allocate particles on Start but don't run until StartSimulation() is called.
+    void Start()     => Initialize();
+    void OnDestroy() => DisposeNative();
+
+    public void StartSimulation() => isSimulating = true;
+    public void StopSimulation()  => isSimulating = false;
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     public void Initialize()
     {
-        particles.Clear();
+        DisposeNative();
         exitBuffer.Clear();
-        PrecomputeKernels();
+
+        n = initialParticleCount;
+        AutoCalibrate();
+        Allocate();
         SpawnParticles();
     }
 
-    private void PrecomputeKernels()
+    void DisposeNative()
     {
-        float h = smoothingRadius;
-        h2 = h * h;
-        h6 = h2 * h2 * h2;
-        h9 = h6 * h2 * h;
-
-        kPoly6     =  315f / (64f * Mathf.PI * h9);
-        // Spiky gradient constant is baked with its negative sign
-        kSpikyGrad = -45f  / (Mathf.PI * h6);
-        kViscLap   =  45f  / (Mathf.PI * h6);
+        if (positions.IsCreated)     positions.Dispose();
+        if (velocities.IsCreated)    velocities.Dispose();
+        if (accelerations.IsCreated) accelerations.Dispose();
+        if (densities.IsCreated)     densities.Dispose();
+        if (pressures.IsCreated)     pressures.Dispose();
+        if (exitFlags.IsCreated)     exitFlags.Dispose();
+        if (exitPos.IsCreated)       exitPos.Dispose();
+        if (exitVel.IsCreated)       exitVel.Dispose();
+        if (hashGrid.IsCreated)      hashGrid.Dispose();
     }
 
-    private void SpawnParticles()
+    void Allocate()
+    {
+        positions     = new NativeArray<float2>(n, Allocator.Persistent);
+        velocities    = new NativeArray<float2>(n, Allocator.Persistent);
+        accelerations = new NativeArray<float2>(n, Allocator.Persistent);
+        densities     = new NativeArray<float> (n, Allocator.Persistent);
+        pressures     = new NativeArray<float> (n, Allocator.Persistent);
+        exitFlags     = new NativeArray<int>   (n, Allocator.Persistent);
+        exitPos       = new NativeArray<float2>(n, Allocator.Persistent);
+        exitVel       = new NativeArray<float2>(n, Allocator.Persistent);
+        hashGrid      = new NativeParallelMultiHashMap<int, int>(n * 4, Allocator.Persistent);
+    }
+
+    // ── Parameter auto-calibration ────────────────────────────────────────────
+
+    // Derive h so that particles are separated by ~1.5h/2 at rest, then
+    // measure the actual equilibrium density at that spacing to set ρ₀.
+    void AutoCalibrate()
+    {
+        float bucketArea = bucketWidth * bucketHeight;
+        float spacing    = math.sqrt(bucketArea / n);   // natural inter-particle spacing
+        smoothingRadius  = spacing * 2f;                // h = 2 × spacing
+
+        PrecomputeKernels();
+
+        restDensity = MeasureEquilibriumDensity(spacing) * 0.97f;
+    }
+
+    // Simulate the Poly6 density sum for a particle surrounded by a regular grid
+    // of neighbors at the given spacing — gives the actual rest density.
+    float MeasureEquilibriumDensity(float spacing)
+    {
+        float rho   = 0f;
+        int   range = Mathf.CeilToInt(smoothingRadius / spacing) + 1;
+        for (int dx = -range; dx <= range; dx++)
+        for (int dy = -range; dy <= range; dy++)
+        {
+            float r2 = (dx * spacing) * (dx * spacing) + (dy * spacing) * (dy * spacing);
+            if (r2 < h2) { float q = h2 - r2; rho += particleMass * kPoly6 * q * q * q; }
+        }
+        return rho;
+    }
+
+    void PrecomputeKernels()
+    {
+        float h = smoothingRadius;
+        h2 = h*h; h6 = h2*h2*h2; h9 = h6*h2*h;
+        kPoly6     =  315f / (64f * math.PI * h9);
+        kSpikyGrad = -45f  / (math.PI * h6);
+        kViscLap   =  45f  / (math.PI * h6);
+        invCellSize = 1f / smoothingRadius;
+    }
+
+    // ── Spawn ─────────────────────────────────────────────────────────────────
+
+    void SpawnParticles()
     {
         if (pendulum == null) return;
 
-        Vector2 center  = BucketCenter;
-        float   spacing = smoothingRadius * 0.75f;
-        int     cols    = Mathf.Max(1, Mathf.FloorToInt(bucketWidth / spacing));
-        int     rows    = Mathf.CeilToInt((float)initialParticleCount / cols);
+        float2 c      = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
+        float  sp     = smoothingRadius * 0.75f;
+        int    cols   = math.max(1, (int)(bucketWidth / sp));
+        float  startX = c.x - (cols - 1) * sp * 0.5f;
+        float  startY = c.y - bucketHeight * 0.5f + sp;
 
-        float startX = center.x - (cols - 1) * spacing * 0.5f;
-        float startY = center.y - bucketHeight * 0.5f + spacing;
-
-        int spawned = 0;
-        for (int r = 0; r < rows && spawned < initialParticleCount; r++)
+        for (int i = 0; i < n; i++)
         {
-            for (int c = 0; c < cols && spawned < initialParticleCount; c++)
-            {
-                Vector2 pos = new Vector2(startX + c * spacing, startY + r * spacing);
-                // Small jitter to break grid symmetry
-                pos.x += Random.Range(-spacing * 0.05f, spacing * 0.05f);
-                pos.y += Random.Range(-spacing * 0.05f, spacing * 0.05f);
-                particles.Add(new SPHParticle(pos));
-                spawned++;
-            }
+            int   col = i % cols, row = i / cols;
+            float jx  = UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
+            float jy  = UnityEngine.Random.Range(-sp * 0.05f, sp * 0.05f);
+            positions[i]  = new float2(startX + col * sp + jx, startY + row * sp + jy);
+            velocities[i] = float2.zero;
         }
     }
+
+    // ── Simulation loop ───────────────────────────────────────────────────────
 
     void FixedUpdate()
     {
-        if (pendulum == null || particles.Count == 0) return;
+        if (!isSimulating || pendulum == null || n == 0) return;
 
-        float dt = Time.fixedDeltaTime;
-        ComputeDensityPressure();
-        ComputeAccelerations();
-        Integrate(dt);
-        EnforceBoundaries();
-        CollectExits();
-    }
+        float  dt     = Time.fixedDeltaTime;
+        float2 center = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
 
-    // ── Density & pressure ────────────────────────────────────────────────────
+        // Clear hash map on main thread before building it in parallel
+        hashGrid.Clear();
 
-    private void ComputeDensityPressure()
-    {
-        int n = particles.Count;
+        // Build spatial grid
+        var jBuild = new BuildGridJob {
+            positions = positions,
+            grid      = hashGrid.AsParallelWriter(),
+            invCellSize = invCellSize
+        }.Schedule(n, 64);
+
+        // Density + pressure
+        var jDens = new DensityPressureJob {
+            positions   = positions,
+            densities   = densities,
+            pressures   = pressures,
+            grid        = hashGrid,
+            h2 = h2, kPoly6 = kPoly6,
+            particleMass = particleMass,
+            stiffness    = stiffness,
+            restDensity  = restDensity,
+            invCellSize  = invCellSize
+        }.Schedule(n, 32, jBuild);
+
+        // Pressure + viscosity forces → accelerations
+        var jForce = new ForceJob {
+            positions       = positions,
+            velocities      = velocities,
+            accelerations   = accelerations,
+            densities       = densities,
+            pressures       = pressures,
+            grid            = hashGrid,
+            smoothingRadius = smoothingRadius,
+            h2 = h2, kSpikyGrad = kSpikyGrad, kViscLap = kViscLap,
+            particleMass    = particleMass,
+            viscosityCoeff  = viscosityCoeff,
+            gravity         = pendulum.gravity,
+            invCellSize     = invCellSize
+        }.Schedule(n, 32, jDens);
+
+        // Symplectic Euler integration
+        var jInteg = new IntegrateJob {
+            positions     = positions,
+            velocities    = velocities,
+            accelerations = accelerations,
+            dt            = dt
+        }.Schedule(n, 64, jForce);
+
+        // Boundary enforcement + exit detection + particle recycling
+        var jBound = new BoundaryExitJob {
+            positions     = positions,
+            velocities    = velocities,
+            exitFlags     = exitFlags,
+            exitPos       = exitPos,
+            exitVel       = exitVel,
+            center        = center,
+            halfW         = bucketWidth  * 0.5f,
+            halfH         = bucketHeight * 0.5f,
+            halfHole      = holeWidth    * 0.5f,
+            wallRestitution = wallRestitution
+        }.Schedule(n, 32, jInteg);
+
+        jBound.Complete();
+
+        // Collect exits (main thread) — convert to managed SPHParticles
         for (int i = 0; i < n; i++)
         {
-            float   rho = 0f;
-            Vector2 pi  = particles[i].position;
-
-            for (int j = 0; j < n; j++)
+            if (exitFlags[i] == 1)
             {
-                float r2 = (pi - particles[j].position).sqrMagnitude;
-                if (r2 < h2)
-                {
-                    float q = h2 - r2;
-                    rho += particleMass * kPoly6 * q * q * q;
-                }
-            }
-
-            particles[i].density  = Mathf.Max(rho, 1f);
-            // Tait equation of state: P = k(ρ - ρ₀)
-            particles[i].pressure = stiffness * (particles[i].density - restDensity);
-        }
-    }
-
-    // ── Force → acceleration ──────────────────────────────────────────────────
-
-    private void ComputeAccelerations()
-    {
-        float g = pendulum != null ? pendulum.gravity : 9.81f;
-        int   n = particles.Count;
-
-        for (int i = 0; i < n; i++)
-        {
-            SPHParticle pi   = particles[i];
-            Vector2 aPres    = Vector2.zero;
-            Vector2 aViscSum = Vector2.zero;
-
-            for (int j = 0; j < n; j++)
-            {
-                if (i == j) continue;
-                SPHParticle pj = particles[j];
-
-                Vector2 rij = pi.position - pj.position;
-                float   r   = rij.magnitude;
-                if (r >= smoothingRadius || r < 1e-5f) continue;
-
-                float   diff = smoothingRadius - r;
-                Vector2 rHat = rij / r;
-
-                // Pressure: a = -Σⱼ mⱼ (Pᵢ/ρᵢ² + Pⱼ/ρⱼ²) ∇W_spiky
-                float pTerm = pi.pressure / (pi.density * pi.density)
-                            + pj.pressure / (pj.density * pj.density);
-                aPres += -particleMass * pTerm * kSpikyGrad * diff * diff * rHat;
-
-                // Viscosity sum (will be scaled by μ/ρᵢ below)
-                // a_visc = (μ/ρᵢ) Σⱼ mⱼ(vⱼ-vᵢ)/ρⱼ ∇²W_visc
-                aViscSum += (particleMass / pj.density)
-                          * (pj.velocity - pi.velocity)
-                          * kViscLap * diff;
-            }
-
-            particles[i].acceleration = aPres
-                                       + (viscosityCoeff / pi.density) * aViscSum
-                                       + new Vector2(0f, -g);
-        }
-    }
-
-    // ── Integration (symplectic Euler) ────────────────────────────────────────
-
-    private void Integrate(float dt)
-    {
-        foreach (SPHParticle p in particles)
-        {
-            p.velocity += p.acceleration * dt;
-            p.position += p.velocity * dt;
-        }
-    }
-
-    // ── Boundary enforcement ──────────────────────────────────────────────────
-
-    private void EnforceBoundaries()
-    {
-        Vector2 center   = BucketCenter;
-        float   halfW    = bucketWidth  * 0.5f;
-        float   halfH    = bucketHeight * 0.5f;
-        float   halfHole = holeWidth    * 0.5f;
-        float   bottom   = center.y - halfH;
-
-        foreach (SPHParticle p in particles)
-        {
-            // Left wall
-            if (p.position.x < center.x - halfW)
-            {
-                p.position.x = center.x - halfW;
-                p.velocity.x = Mathf.Abs(p.velocity.x) * wallRestitution;
-            }
-            // Right wall
-            if (p.position.x > center.x + halfW)
-            {
-                p.position.x = center.x + halfW;
-                p.velocity.x = -Mathf.Abs(p.velocity.x) * wallRestitution;
-            }
-            // Top rim — paint can't overflow
-            if (p.position.y > center.y + halfH)
-            {
-                p.position.y = center.y + halfH;
-                p.velocity.y = -Mathf.Abs(p.velocity.y) * wallRestitution;
-            }
-            // Bottom wall — solid except at hole
-            if (p.position.y < bottom)
-            {
-                bool inHole = Mathf.Abs(p.position.x - center.x) < halfHole;
-                if (!inHole)
-                {
-                    p.position.y = bottom;
-                    p.velocity.y = Mathf.Abs(p.velocity.y) * wallRestitution;
-                }
+                exitBuffer.Add(new SPHParticle(new Vector2(exitPos[i].x, exitPos[i].y)) {
+                    velocity = new Vector2(exitVel[i].x, exitVel[i].y)
+                });
             }
         }
     }
 
-    // ── Exit detection ────────────────────────────────────────────────────────
-
-    private void CollectExits()
-    {
-        Vector2 center   = BucketCenter;
-        float   bottom   = center.y - bucketHeight * 0.5f;
-        float   halfHole = holeWidth * 0.5f;
-
-        for (int i = particles.Count - 1; i >= 0; i--)
-        {
-            SPHParticle p = particles[i];
-            // Particle cleared the hole threshold
-            if (p.position.y < bottom - 0.002f &&
-                Mathf.Abs(p.position.x - center.x) < halfHole)
-            {
-                exitBuffer.Add(p);
-                particles.RemoveAt(i);
-            }
-        }
-    }
-
-    // Called each frame by PaintFlowController to consume exited particles.
+    // Called each frame by PaintFlowController
     public List<SPHParticle> DrainExitBuffer()
     {
         var result = new List<SPHParticle>(exitBuffer);
@@ -247,7 +255,170 @@ public class SPHSimulator : MonoBehaviour
         return result;
     }
 
-    public float FillRatio     => initialParticleCount > 0
-                                ? (float)particles.Count / initialParticleCount : 0f;
-    public int   ParticleCount => particles.Count;
+    public float FillRatio     => n > 0 ? (float)n / initialParticleCount : 0f;
+    public int   ParticleCount => n;
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Jobs
+    // ═════════════════════════════════════════════════════════════════════════
+
+    [BurstCompile]
+    struct BuildGridJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<float2> positions;
+        public NativeParallelMultiHashMap<int, int>.ParallelWriter grid;
+        public float invCellSize;
+
+        public void Execute(int i)
+        {
+            int cx  = (int)math.floor(positions[i].x * invCellSize);
+            int cy  = (int)math.floor(positions[i].y * invCellSize);
+            int key = unchecked(cx * 73856093 ^ cy * 19349663);
+            grid.Add(key, i);
+        }
+    }
+
+    [BurstCompile]
+    struct DensityPressureJob : IJobParallelFor
+    {
+        [ReadOnly]  public NativeArray<float2> positions;
+        [WriteOnly] public NativeArray<float>  densities;
+        [WriteOnly] public NativeArray<float>  pressures;
+        [ReadOnly]  public NativeParallelMultiHashMap<int, int> grid;
+        public float h2, kPoly6, particleMass, stiffness, restDensity, invCellSize;
+
+        public void Execute(int i)
+        {
+            float2 pi  = positions[i];
+            float  rho = 0f;
+            int    ocx = (int)math.floor(pi.x * invCellSize);
+            int    ocy = (int)math.floor(pi.y * invCellSize);
+
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int key = unchecked((ocx + dx) * 73856093 ^ (ocy + dy) * 19349663);
+                if (grid.TryGetFirstValue(key, out int j, out var it))
+                do {
+                    float r2 = math.lengthsq(pi - positions[j]);
+                    if (r2 < h2) { float q = h2 - r2; rho += particleMass * kPoly6 * q * q * q; }
+                } while (grid.TryGetNextValue(out j, ref it));
+            }
+
+            float d = math.max(rho, 1f);
+            densities[i] = d;
+            pressures[i] = stiffness * (d - restDensity);
+        }
+    }
+
+    [BurstCompile]
+    struct ForceJob : IJobParallelFor
+    {
+        [ReadOnly]  public NativeArray<float2> positions;
+        [ReadOnly]  public NativeArray<float2> velocities;
+        [WriteOnly] public NativeArray<float2> accelerations;
+        [ReadOnly]  public NativeArray<float>  densities;
+        [ReadOnly]  public NativeArray<float>  pressures;
+        [ReadOnly]  public NativeParallelMultiHashMap<int, int> grid;
+        public float smoothingRadius, h2, kSpikyGrad, kViscLap;
+        public float particleMass, viscosityCoeff, gravity, invCellSize;
+
+        public void Execute(int i)
+        {
+            float2 pi    = positions[i];
+            float  rhoi  = densities[i], presi = pressures[i];
+            float2 vi    = velocities[i];
+            float2 aPres = float2.zero, aVisc = float2.zero;
+            int    ocx   = (int)math.floor(pi.x * invCellSize);
+            int    ocy   = (int)math.floor(pi.y * invCellSize);
+
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int key = unchecked((ocx + dx) * 73856093 ^ (ocy + dy) * 19349663);
+                if (grid.TryGetFirstValue(key, out int j, out var it))
+                do {
+                    if (j == i) continue;
+                    float2 rij = pi - positions[j];
+                    float  r2  = math.lengthsq(rij);
+                    if (r2 >= h2 || r2 < 1e-10f) continue;
+                    float  r    = math.sqrt(r2);
+                    float  diff = smoothingRadius - r;
+                    float2 rHat = rij / r;
+                    float  pTerm = presi / (rhoi * rhoi) + pressures[j] / (densities[j] * densities[j]);
+                    aPres += -particleMass * pTerm * kSpikyGrad * diff * diff * rHat;
+                    aVisc += (particleMass / densities[j]) * (velocities[j] - vi) * kViscLap * diff;
+                } while (grid.TryGetNextValue(out j, ref it));
+            }
+
+            accelerations[i] = aPres + (viscosityCoeff / rhoi) * aVisc + new float2(0f, -gravity);
+        }
+    }
+
+    [BurstCompile]
+    struct IntegrateJob : IJobParallelFor
+    {
+        public NativeArray<float2> positions;
+        public NativeArray<float2> velocities;
+        [ReadOnly] public NativeArray<float2> accelerations;
+        public float dt;
+
+        public void Execute(int i)
+        {
+            velocities[i] += accelerations[i] * dt;
+            positions[i]  += velocities[i] * dt;
+        }
+    }
+
+    // Enforces bucket walls, detects exits, and recycles exited particles to the
+    // top of the bucket so the total particle count stays constant (infinite paint).
+    [BurstCompile]
+    struct BoundaryExitJob : IJobParallelFor
+    {
+        public NativeArray<float2> positions;
+        public NativeArray<float2> velocities;
+        [WriteOnly] public NativeArray<int>    exitFlags;
+        [WriteOnly] public NativeArray<float2> exitPos;
+        [WriteOnly] public NativeArray<float2> exitVel;
+        public float2 center;
+        public float  halfW, halfH, halfHole, wallRestitution;
+
+        public void Execute(int i)
+        {
+            float2 p      = positions[i];
+            float2 v      = velocities[i];
+            float  bottom = center.y - halfH;
+            exitFlags[i]  = 0;
+
+            // Left / right walls
+            if (p.x < center.x - halfW) { p.x = center.x - halfW; v.x =  math.abs(v.x) * wallRestitution; }
+            if (p.x > center.x + halfW) { p.x = center.x + halfW; v.x = -math.abs(v.x) * wallRestitution; }
+            // Top rim
+            if (p.y > center.y + halfH) { p.y = center.y + halfH; v.y = -math.abs(v.y) * wallRestitution; }
+            // Bottom: solid except at hole
+            if (p.y < bottom)
+            {
+                bool inHole = math.abs(p.x - center.x) < halfHole;
+                if (inHole && p.y < bottom - 0.002f)
+                {
+                    // Record exit data before recycling
+                    exitFlags[i] = 1;
+                    exitPos[i]   = p;
+                    exitVel[i]   = v;
+                    // Recycle to top of bucket with deterministic X spread by index
+                    float rx = ((i % 17) / 17f - 0.5f) * halfW * 0.6f;
+                    p = new float2(center.x + rx, center.y + halfH * 0.3f);
+                    v = float2.zero;
+                }
+                else if (!inHole)
+                {
+                    p.y = bottom;
+                    v.y = math.abs(v.y) * wallRestitution;
+                }
+            }
+
+            positions[i]  = p;
+            velocities[i] = v;
+        }
+    }
 }

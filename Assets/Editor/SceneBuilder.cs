@@ -77,6 +77,19 @@ public class SceneBuilder
         dropletObj.GetComponent<Renderer>().sharedMaterial = dropletMat;
 
         dropletObj.AddComponent<PaintDroplet>();
+
+        // Trail gives paint stream visual continuity — no physics component, purely visual
+        TrailRenderer trail    = dropletObj.AddComponent<TrailRenderer>();
+        trail.time             = 0.06f;
+        trail.minVertexDistance = 0.004f;
+        trail.numCapVertices   = 3;
+        trail.startWidth       = 0.02f;   // overridden per-droplet in Launch()
+        trail.endWidth         = 0f;
+        trail.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        trail.receiveShadows   = false;
+        Material trailMat      = new Material(Shader.Find("Sprites/Default"));
+        trail.sharedMaterial   = trailMat;
+
         dropletObj.SetActive(false);
 
         // --- SimManager ---
@@ -92,21 +105,21 @@ public class SceneBuilder
         sim.ropeLength        = 1.5f;
         sim.dampingCoeff      = 0.05f;
         sim.initialAngleDeg   = 45f;
+        sim.initialAngleDegZ  = 15f;
         sim.gravity           = 9.81f;
         sim.initialPaintMass  = 0.3f;
         sim.paintFlowRate     = 0.01f;
 
         SPHSimulator sph = simManager.AddComponent<SPHSimulator>();
         sph.pendulum              = sim;
-        sph.smoothingRadius       = 0.04f;
-        sph.restDensity           = 1000f;
+        // smoothingRadius and restDensity are auto-calibrated from particleCount+bucket size
         sph.stiffness             = 200f;
-        sph.viscosityCoeff        = 0.08f;
-        sph.particleMass          = 0.02f;
-        sph.initialParticleCount  = 120;
+        sph.viscosityCoeff        = 0.02f;
+        sph.particleMass          = 0.005f;
+        sph.initialParticleCount  = 500;
         sph.bucketWidth           = 0.15f;
         sph.bucketHeight          = 0.20f;
-        sph.holeWidth             = 0.015f;
+        sph.holeWidth             = 0.05f;
         sph.wallRestitution       = 0.2f;
 
         PaintFlowController flow = simManager.AddComponent<PaintFlowController>();
@@ -116,7 +129,7 @@ public class SceneBuilder
         flow.paintColor    = Color.red;
         flow.viscosity     = 0.01f;
         flow.holeRadius    = 0.005f;
-        flow.poolSize      = 100;
+        flow.poolSize      = 500;
         flow.sphSimulator  = sph;
 
         // --- Camera ---

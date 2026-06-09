@@ -1,6 +1,5 @@
 using UnityEngine;
 
-// Draws paint spots on the canvas using Texture2D pixel manipulation
 public class CanvasPainter : MonoBehaviour
 {
     [Header("Canvas Settings")]
@@ -11,11 +10,19 @@ public class CanvasPainter : MonoBehaviour
 
     [Header("Surface Type")]
     public SurfaceType surfaceType = SurfaceType.Canvas;
-
     public enum SurfaceType { Canvas, Metal, Paper, Wood }
 
     private Texture2D paintTexture;
-    private Renderer canvasRenderer;
+    private Renderer  canvasRenderer;
+
+    // Stroke continuity — connects consecutive close hits into smooth brush strokes
+    private Vector3 lastPaintWorld;
+    private float   lastPaintTime   = -1f;
+    private const float maxStrokeGap     = 0.07f;  // world-space max gap to bridge (m)
+    private const float strokeTimeWindow = 0.12f;  // max seconds between linked hits
+
+    // Batched Apply: collect all SetPixel calls in a frame, apply once in LateUpdate
+    private bool pendingApply;
 
     void Start()
     {
@@ -23,102 +30,152 @@ public class CanvasPainter : MonoBehaviour
         InitTexture();
     }
 
-    private void InitTexture()
+    void LateUpdate()
     {
-        paintTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
-
-        // Fill white background
-        Color[] pixels = new Color[textureWidth * textureHeight];
-        for (int i = 0; i < pixels.Length; i++)
-            pixels[i] = Color.white;
-
-        paintTexture.SetPixels(pixels);
-        paintTexture.Apply();
-
-        canvasRenderer.material.mainTexture = paintTexture;
-    }
-
-    // Called by each droplet when it hits the canvas
-    public void PaintAt(Vector3 worldPosition, Color color, float dropletRadius, float impactSpeed)
-    {
-        // Convert world position to texture UV coordinates
-        Vector2 uv = WorldToUV(worldPosition);
-        if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return;
-
-        int centerX = Mathf.RoundToInt(uv.x * textureWidth);
-        int centerY = Mathf.RoundToInt(uv.y * textureHeight);
-
-        // Spread radius depends on impact speed and surface type
-        float spreadFactor = GetSpreadFactor(impactSpeed);
-        int pixelRadius = Mathf.RoundToInt((dropletRadius / canvasWorldWidth) * textureWidth * spreadFactor);
-        pixelRadius = Mathf.Max(2, pixelRadius);
-
-        // Paint a circular spot
-        PaintCircle(centerX, centerY, pixelRadius, color);
-
-        paintTexture.Apply();
-    }
-
-    private void PaintCircle(int cx, int cy, int radius, Color color)
-    {
-        float absorption = GetAbsorption();
-
-        for (int x = cx - radius; x <= cx + radius; x++)
+        if (pendingApply)
         {
-            for (int y = cy - radius; y <= cy + radius; y++)
-            {
-                if (x < 0 || x >= textureWidth || y < 0 || y >= textureHeight) continue;
-
-                float dist = Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
-                if (dist > radius) continue;
-
-                // Soft edge: opacity decreases near the border
-                float alpha = (1f - dist / radius) * absorption;
-                Color existing = paintTexture.GetPixel(x, y);
-                paintTexture.SetPixel(x, y, Color.Lerp(existing, color, alpha));
-            }
+            paintTexture.Apply();
+            pendingApply = false;
         }
     }
 
-    // Surface absorption affects how paint spreads and blends
+    private void InitTexture()
+    {
+        paintTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
+        Color[] pixels = new Color[textureWidth * textureHeight];
+        for (int i = 0; i < pixels.Length; i++) pixels[i] = Color.white;
+        paintTexture.SetPixels(pixels);
+        paintTexture.Apply();
+        canvasRenderer.material.mainTexture = paintTexture;
+    }
+
+    public void PaintAt(Vector3 worldPosition, Color color, float dropletRadius, Vector3 impactVelocity)
+    {
+        Vector2 uv = WorldToUV(worldPosition);
+        if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1)
+        {
+            lastPaintTime = -1f;
+            return;
+        }
+
+        float pixelsPerMeter = textureWidth / canvasWorldWidth;
+        int   cx    = Mathf.RoundToInt(uv.x * textureWidth);
+        int   cy    = Mathf.RoundToInt(uv.y * textureHeight);
+        int   baseR = Mathf.Max(1, Mathf.RoundToInt(dropletRadius * pixelsPerMeter * 2f));
+
+        float hx     = impactVelocity.x;
+        float hz     = impactVelocity.z;
+        float hSpeed = Mathf.Sqrt(hx * hx + hz * hz);
+        float vSpeed = Mathf.Abs(impactVelocity.y) + 0.01f;
+        float elongation = Mathf.Clamp(1f + (hSpeed / vSpeed) * 0.8f, 1f, 2.5f);
+        int   ra    = Mathf.RoundToInt(baseR * elongation);
+        int   rb    = baseR;
+        float angle = hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f;
+        float absorption = GetAbsorption();
+
+        // ── Stroke interpolation ────────────────────────────────────────────
+        // If the previous hit was close in both space and time, fill the gap
+        // between the two positions so the paint forms a continuous stroke.
+        float now = Time.time;
+        if (lastPaintTime > 0f && (now - lastPaintTime) < strokeTimeWindow)
+        {
+            float worldDist = Vector3.Distance(worldPosition, lastPaintWorld);
+            if (worldDist < maxStrokeGap)
+            {
+                Vector2 prevUV = WorldToUV(lastPaintWorld);
+                float   prevCxF = prevUV.x * textureWidth;
+                float   prevCyF = prevUV.y * textureHeight;
+                float   pixDist = Vector2.Distance(new Vector2(prevCxF, prevCyF),
+                                                    new Vector2(cx, cy));
+                int steps = Mathf.Max(1, Mathf.RoundToInt(pixDist / Mathf.Max(1, baseR * 0.5f)));
+                float strokeAngle = Mathf.Atan2(cy - prevCyF, cx - prevCxF);
+                int   srA = Mathf.Max(1, Mathf.RoundToInt(ra * 0.85f));
+                int   srB = Mathf.Max(1, Mathf.RoundToInt(rb * 0.85f));
+                for (int s = 1; s < steps; s++)
+                {
+                    float t  = (float)s / steps;
+                    int   ix = Mathf.RoundToInt(Mathf.Lerp(prevCxF, cx, t));
+                    int   iy = Mathf.RoundToInt(Mathf.Lerp(prevCyF, cy, t));
+                    PaintEllipse(ix, iy, srA, srB, strokeAngle, color, absorption * 0.65f);
+                }
+            }
+        }
+
+        // ── Main splat ──────────────────────────────────────────────────────
+        PaintEllipse(cx, cy, ra, rb, angle, color, absorption);
+
+        // Micro-splatters only at genuinely high impact speeds
+        float impactSpeed = impactVelocity.magnitude;
+        if (impactSpeed > 5f && rb > 2)
+        {
+            int splatterCount = Mathf.Min(4, Mathf.RoundToInt((impactSpeed - 5f) * 1.5f));
+            for (int i = 0; i < splatterCount; i++)
+            {
+                float dist  = Random.Range(ra * 1.5f, ra * 2.5f);
+                float sAngl = Random.Range(0f, Mathf.PI * 2f);
+                int   sx    = Mathf.Clamp(cx + Mathf.RoundToInt(dist * Mathf.Cos(sAngl)), 0, textureWidth  - 1);
+                int   sy    = Mathf.Clamp(cy + Mathf.RoundToInt(dist * Mathf.Sin(sAngl)), 0, textureHeight - 1);
+                PaintEllipse(sx, sy, Mathf.Max(1, rb / 4), Mathf.Max(1, rb / 4), 0f, color, absorption * 0.4f);
+            }
+        }
+
+        // Mark texture dirty — Apply() called once per frame in LateUpdate
+        pendingApply    = true;
+        lastPaintWorld  = worldPosition;
+        lastPaintTime   = now;
+    }
+
+    private void PaintEllipse(int cx, int cy, int ra, int rb, float angle, Color color, float absorption)
+    {
+        float cosA = Mathf.Cos(angle);
+        float sinA = Mathf.Sin(angle);
+        int   maxR = Mathf.Max(ra, rb);
+
+        for (int dx = -maxR; dx <= maxR; dx++)
+        for (int dy = -maxR; dy <= maxR; dy++)
+        {
+            int px = cx + dx, py = cy + dy;
+            if (px < 0 || px >= textureWidth || py < 0 || py >= textureHeight) continue;
+
+            float ex =  dx * cosA + dy * sinA;
+            float ey = -dx * sinA + dy * cosA;
+            float d  = (ex * ex) / (float)(ra * ra) + (ey * ey) / (float)(rb * rb);
+            if (d > 1f) continue;
+
+            float alpha   = (1f - Mathf.Sqrt(d)) * absorption;
+            Color existing = paintTexture.GetPixel(px, py);
+            paintTexture.SetPixel(px, py, Color.Lerp(existing, color, alpha));
+        }
+    }
+
     private float GetAbsorption()
     {
         switch (surfaceType)
         {
-            case SurfaceType.Canvas: return 0.85f;   // high absorption, irregular spread
-            case SurfaceType.Metal:  return 0.4f;    // low absorption, sharp edges
-            case SurfaceType.Paper:  return 0.9f;    // very high absorption
-            case SurfaceType.Wood:   return 0.65f;
-            default: return 0.75f;
+            case SurfaceType.Canvas: return 0.45f;
+            case SurfaceType.Metal:  return 0.25f;
+            case SurfaceType.Paper:  return 0.55f;
+            case SurfaceType.Wood:   return 0.35f;
+            default: return 0.40f;
         }
-    }
-
-    private float GetSpreadFactor(float impactSpeed)
-    {
-        // Faster impact = larger spread
-        float base_ = surfaceType == SurfaceType.Metal ? 0.8f : 1.2f;
-        return base_ + impactSpeed * 0.05f;
     }
 
     private Vector2 WorldToUV(Vector3 worldPos)
     {
         Vector3 local = transform.InverseTransformPoint(worldPos);
-        float u = (local.x / canvasWorldWidth) + 0.5f;
-        float v = (local.z / canvasWorldHeight) + 0.5f;
-        return new Vector2(u, v);
+        return new Vector2(local.x + 0.5f, local.y + 0.5f);
     }
 
-    // Save canvas as PNG
     public void SaveCanvas(string path)
     {
         byte[] bytes = paintTexture.EncodeToPNG();
         System.IO.File.WriteAllBytes(path, bytes);
-        Debug.Log("Canvas saved to: " + path);
     }
 
-    // Clear the canvas
     public void ClearCanvas()
     {
+        lastPaintTime = -1f;
+        pendingApply  = false;
         InitTexture();
     }
 }
