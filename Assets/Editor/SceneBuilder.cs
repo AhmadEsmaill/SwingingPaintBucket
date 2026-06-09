@@ -55,7 +55,7 @@ public class SceneBuilder
         canvas.name = "PaintCanvas";
         canvas.transform.position   = new Vector3(0, 0, 0);
         canvas.transform.rotation   = Quaternion.Euler(90, 0, 0);
-        canvas.transform.localScale = new Vector3(4, 4, 1);
+        canvas.transform.localScale = new Vector3(8, 8, 1);
         Object.DestroyImmediate(canvas.GetComponent<Collider>());
 
         Material canvasMat = new Material(Shader.Find("Standard"));
@@ -63,8 +63,8 @@ public class SceneBuilder
         canvas.GetComponent<Renderer>().sharedMaterial = canvasMat;
 
         CanvasPainter painter = canvas.AddComponent<CanvasPainter>();
-        painter.canvasWorldWidth  = 4f;
-        painter.canvasWorldHeight = 4f;
+        painter.canvasWorldWidth  = 8f;
+        painter.canvasWorldHeight = 8f;
 
         // --- Droplet Prefab ---
         GameObject dropletObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -106,7 +106,7 @@ public class SceneBuilder
         sim.ropeLength        = 1.5f;
         sim.dampingCoeff      = 0.05f;
         sim.initialAngleDeg   = 45f;
-        sim.initialAngleDegZ  = 15f;
+        sim.initialAngleDegZ  = 0f;
         sim.gravity           = 9.81f;
         sim.initialPaintMass  = 0.3f;
         sim.paintFlowRate     = 0.01f;

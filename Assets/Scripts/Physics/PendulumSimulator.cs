@@ -65,15 +65,20 @@ public class PendulumSimulator : MonoBehaviour
 
     public void Initialize()
     {
-        theta    = initialAngleDeg  * Mathf.Deg2Rad;
-        thetaZ   = initialAngleDegZ * Mathf.Deg2Rad;
-        thetaZDot = 0f;
+        theta    = initialAngleDeg * Mathf.Deg2Rad;
+        thetaZ   = 0f;   // always start with no Z displacement
         currentPaintMass = initialPaintMass;
         isSimulating = false;
 
-        float forceRad   = initialForceAngle * Mathf.Deg2Rad;
-        float tangential = initialForceMagnitude * Mathf.Cos(forceRad - theta);
-        thetaDot = initialAngularVelocity + tangential / (CurrentMass * ropeLength);
+        // Decompose the initial force into X and Z components.
+        // forceAngle=0  → pure X swing  → straight line on canvas
+        // forceAngle=90 → pure Z swing  → perpendicular straight line
+        // forceAngle=45 → equal X+Z     → circular / elliptical pattern
+        float forceRad = initialForceAngle * Mathf.Deg2Rad;
+        float forceX   = initialForceMagnitude * Mathf.Cos(forceRad);
+        float forceZ   = initialForceMagnitude * Mathf.Sin(forceRad);
+        thetaDot  = initialAngularVelocity + forceX / (CurrentMass * ropeLength);
+        thetaZDot = forceZ / (CurrentMass * ropeLength);
 
         UpdateBucketTransform();
         UpdateRopeRenderer();
