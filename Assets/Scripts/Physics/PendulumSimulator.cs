@@ -8,8 +8,11 @@ public class PendulumSimulator : MonoBehaviour
     public float bucketHalfHeight = 0.2f;  // half the visual bucket height (world units)
 
     [Header("Rope Properties")]
-    public float ropeLength = 1.5f;
+    public float ropeLength   = 1.5f;
     public float dampingCoeff = 0.05f;
+    // 0 = rigid inextensible rope; >0 = elastic (spring-pendulum)
+    public float ropeStiffness = 0f;   // N/m
+    public float ropeDamping   = 2f;   // N·s/m (radial oscillation damping)
 
     [Header("Motion Properties")]
     public float initialAngleDeg = 45f;
@@ -38,11 +41,15 @@ public class PendulumSimulator : MonoBehaviour
     // Current state
     private float theta;
     private float thetaDot;
-    private float thetaZ;       // Z-axis swing angle
+    private float thetaZ;
     private float thetaZDot;
+    private float currentLength;     // actual rope length (= ropeLength when rigid)
+    private float currentLengthDot;  // rate of change of rope length (m/s)
     private float currentPaintMass;
     private bool isSimulating;
-    private Vector3 ropeDirection = Vector3.down;  // cached unit vector from pivot to bucket
+    private Vector3 ropeDirection = Vector3.down;
+
+    public float CurrentLength => currentLength;
 
     // Public read-only properties used by PaintFlowController and others
     public float   Theta           => theta;
@@ -82,13 +89,18 @@ public class PendulumSimulator : MonoBehaviour
         float omega  = Mathf.Sqrt(gravity / ropeLength);
         float angRad = initialAngleDeg * Mathf.Deg2Rad;
 
-        theta  = angRad * cosD;   // initial X displacement
-        thetaZ = 0f;              // Z always starts from rest position
+        theta  = angRad * cosD;
+        thetaZ = 0f;
 
         float accel = initialForceMagnitude / (CurrentMass * ropeLength);
         thetaDot  = initialAngularVelocity + accel * cosD;
-        // Z gets initial velocity equal to ω × (sin component of angle) → sine oscillation in Z
         thetaZDot = angRad * sinD * omega + accel * sinD;
+
+        // Start rope at static equilibrium length so it doesn't lurch on first frame
+        currentLength = (ropeStiffness > 0f)
+            ? ropeLength + CurrentMass * gravity / ropeStiffness
+            : ropeLength;
+        currentLengthDot = 0f;
 
         UpdateBucketTransform();
         UpdateRopeRenderer();
@@ -113,6 +125,7 @@ public class PendulumSimulator : MonoBehaviour
         currentPaintMass = Mathf.Max(0f, currentPaintMass - paintFlowRate * dt);
 
         Vector3 prevPos = BucketPosition;
+        if (ropeStiffness > 0f) RK4StepRadial(dt);
         RK4Step(dt);
         RK4StepZ(dt);
         UpdateBucketTransform();
@@ -161,28 +174,63 @@ public class PendulumSimulator : MonoBehaviour
         thetaZDot += (dt / 6f) * (k1_w + 2f * k2_w + 2f * k3_w + k4_w);
     }
 
-    // d²θ/dt² from the full pendulum ODE with damping and air drag
-    // d²θ/dt² + b/(mL)·dθ/dt + g/L·sin(θ) = F_wind_tangential / (mL)
+    // d²θ/dt² — uses currentLength so elastic rope automatically changes pendulum frequency
     private float AngularAcceleration(float th, float thDot, float mass)
     {
-        float linearVel = thDot * ropeLength;
+        float L         = currentLength;
+        float linearVel = thDot * L;
         float crossSection = Mathf.PI * bucketRadius * bucketRadius;
 
-        // Air drag acts opposite to motion direction
-        float dragMag = 0.5f * airDensity * dragCoefficient * crossSection * linearVel * Mathf.Abs(linearVel);
-        float dragAngular = dragMag / (mass * ropeLength);
+        float dragMag     = 0.5f * airDensity * dragCoefficient * crossSection * linearVel * Mathf.Abs(linearVel);
+        float dragAngular = dragMag / (mass * L);
+        float damping     = (dampingCoeff / (mass * L)) * thDot;
+        float gravityTerm = (gravity / L) * Mathf.Sin(th);
 
-        // Damping from rope internal friction
-        float damping = (dampingCoeff / (mass * ropeLength)) * thDot;
+        // Coriolis coupling: -2*(Ḷ/L)*θ̇  (only present when rope is elastic)
+        float coriolis = (ropeStiffness > 0f) ? 2f * (currentLengthDot / L) * thDot : 0f;
 
-        // Gravity restoring torque
-        float gravityTerm = (gravity / ropeLength) * Mathf.Sin(th);
-
-        // Wind contribution (tangential component only, X axis)
         float windTangential = windForce.x * Mathf.Cos(th) - windForce.y * Mathf.Sin(th);
-        float windAngular = windTangential / (mass * ropeLength);
+        float windAngular    = windTangential / (mass * L);
 
-        return -damping - gravityTerm - dragAngular + windAngular;
+        return -damping - gravityTerm - dragAngular + windAngular - coriolis;
+    }
+
+    // RK4 for the radial (elastic) DOF: integrates currentLength and currentLengthDot
+    private void RK4StepRadial(float dt)
+    {
+        float m = CurrentMass;
+
+        float k1_l = currentLengthDot;
+        float k1_v = RadialAcceleration(currentLength, currentLengthDot, m);
+
+        float k2_l = currentLengthDot + 0.5f * dt * k1_v;
+        float k2_v = RadialAcceleration(currentLength + 0.5f * dt * k1_l, k2_l, m);
+
+        float k3_l = currentLengthDot + 0.5f * dt * k2_v;
+        float k3_v = RadialAcceleration(currentLength + 0.5f * dt * k2_l, k3_l, m);
+
+        float k4_l = currentLengthDot + dt * k3_v;
+        float k4_v = RadialAcceleration(currentLength + dt * k3_l, k4_l, m);
+
+        currentLength    += (dt / 6f) * (k1_l + 2f * k2_l + 2f * k3_l + k4_l);
+        currentLengthDot += (dt / 6f) * (k1_v + 2f * k2_v + 2f * k3_v + k4_v);
+
+        currentLength = Mathf.Max(currentLength, 0.1f); // prevent collapse
+    }
+
+    // L̈ = L(θ̇²+θ_ż²) + g·cosY - (k/m)(L-L₀) - (c/m)·Ḷ
+    private float RadialAcceleration(float L, float Ldot, float mass)
+    {
+        float sinX = Mathf.Sin(theta);
+        float sinZ = Mathf.Sin(thetaZ);
+        float cosY = Mathf.Sqrt(Mathf.Max(0f, 1f - sinX * sinX - sinZ * sinZ));
+
+        float centrifugal = L * (thetaDot * thetaDot + thetaZDot * thetaZDot);
+        float gravityComp = gravity * cosY;
+        float spring      = -(ropeStiffness / mass) * (L - ropeLength);
+        float damp        = -(ropeDamping   / mass) * Ldot;
+
+        return centrifugal + gravityComp + spring + damp;
     }
 
     private void UpdateBucketTransform()
@@ -195,9 +243,9 @@ public class PendulumSimulator : MonoBehaviour
         float cosY  = Mathf.Sqrt(Mathf.Max(0f, 1f - sinX * sinX - sinZ * sinZ));
 
         BucketPosition = pivotPoint.position + new Vector3(
-            ropeLength * sinX,
-            -ropeLength * cosY,
-            ropeLength * sinZ);
+            currentLength * sinX,
+            -currentLength * cosY,
+            currentLength * sinZ);
 
         ropeDirection = (BucketPosition - pivotPoint.position).normalized;
 
@@ -216,16 +264,14 @@ public class PendulumSimulator : MonoBehaviour
         ropeRenderer.SetPosition(1, BucketPosition);
     }
 
-    // Rope tension: T = mg cos(θ) + mv²/L
     public float GetRopeTension()
     {
-        float v = thetaDot * ropeLength;
-        return CurrentMass * (gravity * Mathf.Cos(theta) + v * v / ropeLength);
+        float v = thetaDot * currentLength;
+        return CurrentMass * (gravity * Mathf.Cos(theta) + v * v / currentLength);
     }
 
-    // Approximate period for small angles: T = 2π√(L/g)
     public float GetApproximatePeriod()
     {
-        return 2f * Mathf.PI * Mathf.Sqrt(ropeLength / gravity);
+        return 2f * Mathf.PI * Mathf.Sqrt(currentLength / gravity);
     }
 }

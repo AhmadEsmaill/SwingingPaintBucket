@@ -11,6 +11,10 @@ public class CanvasPainter : MonoBehaviour
     [Header("Surface Type")]
     public SurfaceType surfaceType = SurfaceType.Canvas;
 
+    // Auto-computed from surface type — matches original per-surface absorption values.
+    // Not set manually; updated whenever surfaceType changes.
+    [HideInInspector] public float blendFactor = 0.55f;
+
     public enum SurfaceType { Canvas, Metal, Paper, Wood }
 
     // Per-surface properties ─────────────────────────────────────────────────
@@ -44,6 +48,7 @@ public class CanvasPainter : MonoBehaviour
     void Start()
     {
         canvasRenderer = GetComponent<Renderer>();
+        SyncBlendFromSurface();
         InitTexture();
     }
 
@@ -71,7 +76,14 @@ public class CanvasPainter : MonoBehaviour
     {
         surfaceType   = type;
         lastPaintTime = -1f;
+        SyncBlendFromSurface();
         InitTexture();
+    }
+
+    // blendFactor = 1 - absorption so that paintOpacity = absorption (original behaviour)
+    private void SyncBlendFromSurface()
+    {
+        blendFactor = 1f - Absorption[(int)surfaceType];
     }
 
     public void PaintAt(Vector3 worldPosition, Color color, float dropletRadius,
@@ -108,7 +120,8 @@ public class CanvasPainter : MonoBehaviour
                       ? 0f                              // grain always horizontal
                       : (hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f);
 
-        float absorption = Absorption[(int)surfaceType];
+        // paintOpacity: 0%blend→1.0 (fully opaque), 75%blend→0.25 (transparent/mixing)
+        float paintOpacity = 1f - blendFactor;
 
         // ── Stroke interpolation ────────────────────────────────────────────
         float now = Time.time;
@@ -132,13 +145,13 @@ public class CanvasPainter : MonoBehaviour
                     float t  = (float)s / steps;
                     int   ix = Mathf.RoundToInt(Mathf.Lerp(prevCxF, cx, t));
                     int   iy = Mathf.RoundToInt(Mathf.Lerp(prevCyF, cy, t));
-                    PaintEllipse(ix, iy, srA, srB, strokeAngle, color, absorption * 0.65f);
+                    PaintEllipse(ix, iy, srA, srB, strokeAngle, color, paintOpacity * 0.65f);
                 }
             }
         }
 
         // ── Main splat ──────────────────────────────────────────────────────
-        PaintEllipse(cx, cy, ra, rb, angle, color, absorption);
+        PaintEllipse(cx, cy, ra, rb, angle, color, paintOpacity);
 
         // Metal: paint beads — add tiny raised satellite dots nearby
         if (surfaceType == SurfaceType.Metal && rb > 1)
@@ -151,7 +164,7 @@ public class CanvasPainter : MonoBehaviour
                 int   bx   = Mathf.Clamp(cx + Mathf.RoundToInt(d * Mathf.Cos(a)), 0, textureWidth  - 1);
                 int   by   = Mathf.Clamp(cy + Mathf.RoundToInt(d * Mathf.Sin(a)), 0, textureHeight - 1);
                 int   br   = Mathf.Max(1, rb / 3);
-                PaintEllipse(bx, by, br, br, 0f, color, absorption * 0.7f);
+                PaintEllipse(bx, by, br, br, 0f, color, paintOpacity * 0.7f);
             }
         }
 
@@ -167,7 +180,7 @@ public class CanvasPainter : MonoBehaviour
                 int   sx    = Mathf.Clamp(cx + Mathf.RoundToInt(dist * Mathf.Cos(sAngl)), 0, textureWidth  - 1);
                 int   sy    = Mathf.Clamp(cy + Mathf.RoundToInt(dist * Mathf.Sin(sAngl)), 0, textureHeight - 1);
                 PaintEllipse(sx, sy, Mathf.Max(1, rb / 4), Mathf.Max(1, rb / 4), 0f, color,
-                             absorption * 0.4f);
+                             paintOpacity * 0.4f);
             }
         }
 
