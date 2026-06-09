@@ -183,33 +183,38 @@ public class SPHSimulator : MonoBehaviour
     {
         if (!isSimulating || pendulum == null || n == 0) return;
 
+        // Active particle count follows paint fill ratio.
+        // As paint depletes the bucket mass, fewer particles are simulated —
+        // which naturally reduces flow until the bucket is empty.
+        int activeN = (pendulum != null)
+            ? Mathf.Max(0, Mathf.RoundToInt(n * pendulum.PaintFillRatio))
+            : n;
+
+        if (activeN == 0) return;
+
         float  dt     = Time.fixedDeltaTime;
         float2 center = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
 
-        // Clear hash map on main thread before building it in parallel
         hashGrid.Clear();
 
-        // Build spatial grid
         var jBuild = new BuildGridJob {
-            positions = positions,
-            grid      = hashGrid.AsParallelWriter(),
-            invCellSize = invCellSize
-        }.Schedule(n, 64);
-
-        // Density + pressure
-        var jDens = new DensityPressureJob {
             positions   = positions,
-            densities   = densities,
-            pressures   = pressures,
-            grid        = hashGrid,
+            grid        = hashGrid.AsParallelWriter(),
+            invCellSize = invCellSize
+        }.Schedule(activeN, 64);
+
+        var jDens = new DensityPressureJob {
+            positions    = positions,
+            densities    = densities,
+            pressures    = pressures,
+            grid         = hashGrid,
             h2 = h2, kPoly6 = kPoly6,
             particleMass = particleMass,
             stiffness    = stiffness,
             restDensity  = restDensity,
             invCellSize  = invCellSize
-        }.Schedule(n, 32, jBuild);
+        }.Schedule(activeN, 32, jBuild);
 
-        // Pressure + viscosity forces → accelerations
         var jForce = new ForceJob {
             positions       = positions,
             velocities      = velocities,
@@ -223,20 +228,17 @@ public class SPHSimulator : MonoBehaviour
             viscosityCoeff  = viscosityCoeff,
             gravity         = pendulum.gravity,
             invCellSize     = invCellSize
-        }.Schedule(n, 32, jDens);
+        }.Schedule(activeN, 32, jDens);
 
-        // Symplectic Euler integration
         var jInteg = new IntegrateJob {
             positions     = positions,
             velocities    = velocities,
             accelerations = accelerations,
             dt            = dt
-        }.Schedule(n, 64, jForce);
+        }.Schedule(activeN, 64, jForce);
 
-        // Bucket local axes (rope-aligned, projected onto world XY)
         GetBucketAxes(pendulum, out float2 axisX, out float2 axisY);
 
-        // Boundary enforcement + exit detection + particle recycling
         var jBound = new BoundaryExitJob {
             positions     = positions,
             velocities    = velocities,
@@ -250,12 +252,11 @@ public class SPHSimulator : MonoBehaviour
             halfH         = bucketHeight * 0.5f,
             halfHole      = holeWidth    * 0.5f,
             wallRestitution = wallRestitution
-        }.Schedule(n, 32, jInteg);
+        }.Schedule(activeN, 32, jInteg);
 
         jBound.Complete();
 
-        // Collect exits (main thread) — convert to managed SPHParticles
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < activeN; i++)
         {
             if (exitFlags[i] == 1)
             {
@@ -274,7 +275,7 @@ public class SPHSimulator : MonoBehaviour
         return result;
     }
 
-    public float FillRatio     => n > 0 ? (float)n / initialParticleCount : 0f;
+    public float FillRatio     => pendulum != null ? pendulum.PaintFillRatio : 1f;
     public int   ParticleCount => n;
 
     // ═════════════════════════════════════════════════════════════════════════
