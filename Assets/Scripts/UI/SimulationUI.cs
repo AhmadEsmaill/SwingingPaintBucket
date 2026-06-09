@@ -132,13 +132,13 @@ public class SimulationUI : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Direction (deg):", labelStyle, GUILayout.Width(115));
+        GUILayout.Label("Swing Dir (deg):", labelStyle, GUILayout.Width(115));
         forceAngleText = GUILayout.TextField(forceAngleText, GUILayout.Width(80));
         GUILayout.EndHorizontal();
 
         GUIStyle hintStyle = new GUIStyle(labelStyle)
             { fontSize = 10, normal = { textColor = new Color(0.6f, 0.6f, 0.6f) } };
-        GUILayout.Label("0°=line  45°=circle  90°=⊥ line", hintStyle);
+        GUILayout.Label("0°=horiz  45°=circle  90°=vert", hintStyle);
 
         GUILayout.Space(10);
 

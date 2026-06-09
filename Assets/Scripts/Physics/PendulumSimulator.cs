@@ -65,20 +65,30 @@ public class PendulumSimulator : MonoBehaviour
 
     public void Initialize()
     {
-        theta    = initialAngleDeg * Mathf.Deg2Rad;
-        thetaZ   = 0f;   // always start with no Z displacement
         currentPaintMass = initialPaintMass;
         isSimulating = false;
 
-        // Decompose the initial force into X and Z components.
-        // forceAngle=0  → pure X swing  → straight line on canvas
-        // forceAngle=90 → pure Z swing  → perpendicular straight line
-        // forceAngle=45 → equal X+Z     → circular / elliptical pattern
-        float forceRad = initialForceAngle * Mathf.Deg2Rad;
-        float forceX   = initialForceMagnitude * Mathf.Cos(forceRad);
-        float forceZ   = initialForceMagnitude * Mathf.Sin(forceRad);
-        thetaDot  = initialAngularVelocity + forceX / (CurrentMass * ropeLength);
-        thetaZDot = forceZ / (CurrentMass * ropeLength);
+        // swingDir controls the shape drawn on canvas:
+        //   0°  → pure X displacement → horizontal line
+        //   90° → pure Z velocity     → vertical line
+        //   45° → X displacement + Z velocity in quadrature → perfect circle
+        //
+        // For circular motion X and Z must be 90° out of phase:
+        //   theta(t)  = A·cosD · cos(ωt)        ← displacement sets cosine phase
+        //   thetaZ(t) = A·sinD · sin(ωt)        ← velocity sets sine phase (quadrature)
+        float dir    = initialForceAngle * Mathf.Deg2Rad;
+        float cosD   = Mathf.Cos(dir);
+        float sinD   = Mathf.Sin(dir);
+        float omega  = Mathf.Sqrt(gravity / ropeLength);
+        float angRad = initialAngleDeg * Mathf.Deg2Rad;
+
+        theta  = angRad * cosD;   // initial X displacement
+        thetaZ = 0f;              // Z always starts from rest position
+
+        float accel = initialForceMagnitude / (CurrentMass * ropeLength);
+        thetaDot  = initialAngularVelocity + accel * cosD;
+        // Z gets initial velocity equal to ω × (sin component of angle) → sine oscillation in Z
+        thetaZDot = angRad * sinD * omega + accel * sinD;
 
         UpdateBucketTransform();
         UpdateRopeRenderer();
