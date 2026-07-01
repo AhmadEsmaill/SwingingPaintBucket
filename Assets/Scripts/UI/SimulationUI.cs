@@ -329,7 +329,6 @@ public class SimulationUI : MonoBehaviour
     {
         pendulum?.StopSimulation();
         sphSimulator?.StopSimulation();
-        canvasPainter?.ResetStroke();
         isRunning = false;
     }
 

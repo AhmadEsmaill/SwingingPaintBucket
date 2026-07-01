@@ -41,10 +41,6 @@ public class CanvasPainter : MonoBehaviour
     private const float maxStrokeGap     = 0.22f;
     private const float strokeTimeWindow = 0.28f;
 
-    // Continuous stroke state (used by PaintContinuousStroke)
-    private Vector3 lastStrokeWorld;
-    private bool    hasLastStroke = false;
-
     private bool pendingApply;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -192,78 +188,6 @@ public class CanvasPainter : MonoBehaviour
         lastPaintWorld = worldPosition;
         lastPaintTime  = now;
     }
-
-    // Single independent splat — no stroke interpolation.
-    // High-frequency calls create natural wet-paint texture through circle overlap.
-    public void PaintDot(Vector3 worldPos, Color color, float radius, Vector3 impactVelocity)
-    {
-        Vector2 uv = WorldToUV(worldPos);
-        if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return;
-
-        float ppm  = textureWidth / canvasWorldWidth;
-        int   cx   = Mathf.RoundToInt(uv.x * textureWidth);
-        int   cy   = Mathf.RoundToInt(uv.y * textureHeight);
-        // radius is already in world-space visual units — no extra multiplier needed
-        int   baseR = Mathf.Max(4, Mathf.RoundToInt(radius * ppm * SpotScale[(int)surfaceType]));
-
-        float hx     = impactVelocity.x;
-        float hz     = impactVelocity.z;
-        float hSpeed = Mathf.Sqrt(hx * hx + hz * hz);
-        float vSpeed = Mathf.Abs(impactVelocity.y) + 0.01f;
-        float elong  = Mathf.Clamp(1f + (hSpeed / vSpeed) * 0.6f, 1f, 2.2f);
-        int   ra     = Mathf.RoundToInt(baseR * elong);
-        int   rb     = baseR;
-        float angle  = hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f;
-
-        PaintEllipse(cx, cy, ra, rb, angle, color, 1f - blendFactor);
-        pendingApply = true;
-    }
-
-    // Called every frame from PaintFlowController — draws a gapless connected stroke
-    // following the ballistic landing position of paint from the bucket hole.
-    public void PaintContinuousStroke(Vector3 worldPos, Color color, float radius)
-    {
-        Vector2 uv = WorldToUV(worldPos);
-        if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1)
-        {
-            hasLastStroke = false;
-            return;
-        }
-
-        float ppm = textureWidth / canvasWorldWidth;
-        int   cx  = Mathf.RoundToInt(uv.x * textureWidth);
-        int   cy  = Mathf.RoundToInt(uv.y * textureHeight);
-        int   r   = Mathf.Max(3, Mathf.RoundToInt(radius * ppm * 6f * SpotScale[(int)surfaceType]));
-        float opacity = 1f - blendFactor;
-
-        if (hasLastStroke)
-        {
-            Vector2 prevUV  = WorldToUV(lastStrokeWorld);
-            float   prevCxF = prevUV.x * textureWidth;
-            float   prevCyF = prevUV.y * textureHeight;
-            float   pixDist = Vector2.Distance(new Vector2(prevCxF, prevCyF), new Vector2(cx, cy));
-            int     steps   = Mathf.Max(1, Mathf.RoundToInt(pixDist / Mathf.Max(1f, r * 0.25f)));
-            float   angle   = Mathf.Atan2(cy - prevCyF, cx - prevCxF);
-
-            for (int s = 0; s <= steps; s++)
-            {
-                float t  = (float)s / steps;
-                int   ix = Mathf.RoundToInt(Mathf.Lerp(prevCxF, cx, t));
-                int   iy = Mathf.RoundToInt(Mathf.Lerp(prevCyF, cy, t));
-                PaintEllipse(ix, iy, r, r, angle, color, opacity * 0.85f);
-            }
-        }
-        else
-        {
-            PaintEllipse(cx, cy, r, r, 0f, color, opacity);
-        }
-
-        lastStrokeWorld = worldPos;
-        hasLastStroke   = true;
-        pendingApply    = true;
-    }
-
-    public void ResetStroke() => hasLastStroke = false;
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
