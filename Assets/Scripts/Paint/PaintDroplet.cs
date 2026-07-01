@@ -34,7 +34,7 @@ public class PaintDroplet : MonoBehaviour
         {
             trail.startColor = new Color(paintColor.r, paintColor.g, paintColor.b, 0.85f);
             trail.endColor   = new Color(paintColor.r, paintColor.g, paintColor.b, 0f);
-            trail.startWidth = radius * 2.5f;
+            trail.startWidth = Mathf.Max(0.04f, radius * 3f);
             trail.endWidth   = 0f;
             trail.Clear();
             trail.emitting   = true;   // Resume recording from the correct position

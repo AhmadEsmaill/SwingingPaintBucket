@@ -163,7 +163,7 @@ public class SimulationUI : MonoBehaviour
 
         GUIStyle hintStyle = new GUIStyle(labelStyle)
             { fontSize = 10, normal = { textColor = new Color(0.6f, 0.6f, 0.6f) } };
-        GUILayout.Label("0°=horiz  45°=circle  90°=vert", hintStyle);
+        GUILayout.Label("dir 0°=line  90°=sideways → ellipse/circle", hintStyle);
 
         GUILayout.Space(10);
 
@@ -329,6 +329,7 @@ public class SimulationUI : MonoBehaviour
     {
         pendulum?.StopSimulation();
         sphSimulator?.StopSimulation();
+        canvasPainter?.ResetStroke();
         isRunning = false;
     }
 

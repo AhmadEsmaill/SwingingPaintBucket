@@ -69,7 +69,7 @@ public class SceneBuilder
         // --- Droplet Prefab ---
         GameObject dropletObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         dropletObj.name = "DropletPrefab";
-        dropletObj.transform.localScale = Vector3.one * 0.03f;
+        dropletObj.transform.localScale = Vector3.one * 0.06f;
         Object.DestroyImmediate(dropletObj.GetComponent<Collider>());
 
         // Unlit so the droplet's colour in the air matches exactly what it paints on canvas
@@ -81,10 +81,10 @@ public class SceneBuilder
 
         // Trail gives paint stream visual continuity — no physics component, purely visual
         TrailRenderer trail    = dropletObj.AddComponent<TrailRenderer>();
-        trail.time             = 0.06f;
-        trail.minVertexDistance = 0.004f;
-        trail.numCapVertices   = 3;
-        trail.startWidth       = 0.02f;   // overridden per-droplet in Launch()
+        trail.time             = 0.18f;
+        trail.minVertexDistance = 0.003f;
+        trail.numCapVertices   = 4;
+        trail.startWidth       = 0.05f;   // overridden per-droplet in Launch()
         trail.endWidth         = 0f;
         trail.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         trail.receiveShadows   = false;
