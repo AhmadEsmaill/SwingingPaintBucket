@@ -73,6 +73,7 @@ public class SPHSimulator : MonoBehaviour
         AutoCalibrate();
         Allocate();
         SpawnParticles();
+        ActiveParticleCount = n;   // full bucket before simulation starts
     }
 
     void DisposeNative()
@@ -179,7 +180,12 @@ public class SPHSimulator : MonoBehaviour
 
     // ── Simulation loop ───────────────────────────────────────────────────────
 
-    void FixedUpdate()
+    // Stepped in Update (NOT FixedUpdate) on purpose: if an SPH step costs more
+    // than the fixed timestep, Unity re-runs FixedUpdate repeatedly to catch up,
+    // which snowballs into a "spiral of death" freeze as particle count grows.
+    // Running once per rendered frame with a clamped dt makes a heavy particle
+    // count merely lower the FPS instead of freezing the whole simulation.
+    void Update()
     {
         if (!isSimulating || pendulum == null || n == 0) return;
 
@@ -189,10 +195,13 @@ public class SPHSimulator : MonoBehaviour
         int activeN = (pendulum != null)
             ? Mathf.Max(0, Mathf.RoundToInt(n * pendulum.PaintFillRatio))
             : n;
+        ActiveParticleCount = activeN;
 
         if (activeN == 0) return;
 
-        float  dt     = Time.fixedDeltaTime;
+        // Clamp dt so a low frame-rate slows the sim down gracefully (stable)
+        // rather than exploding; matches the old 0.02 s fixed step as the cap.
+        float  dt     = Mathf.Min(Time.deltaTime, 0.02f);
         float2 center = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
 
         hashGrid.Clear();
@@ -277,6 +286,36 @@ public class SPHSimulator : MonoBehaviour
 
     public float FillRatio     => pendulum != null ? pendulum.PaintFillRatio : 1f;
     public int   ParticleCount => n;
+
+    // Number of particles actually simulated this step (follows the fill ratio).
+    public int  ActiveParticleCount { get; private set; }
+    public bool HasParticleData => positions.IsCreated;
+
+    // Copies the active particles into 'dest' expressed in the bucket's LOCAL frame:
+    //   dest[i].x = lateral position / halfWidth   (−1 = left wall, +1 = right wall)
+    //   dest[i].y = axial position  / halfHeight   (−1 = top rim,   +1 = bottom/hole)
+    //   dest[i].z = speed magnitude (m/s)
+    // Returns the number of entries written. Used by the bucket-fluid inset view.
+    public int CopyLocalParticles(Vector3[] dest)
+    {
+        if (!positions.IsCreated || pendulum == null || dest == null) return 0;
+
+        GetBucketAxes(pendulum, out float2 axisX, out float2 axisY);
+        float2 center   = new float2(pendulum.BucketCenter.x, pendulum.BucketCenter.y);
+        float  invHalfW = 2f / Mathf.Max(bucketWidth,  1e-4f);
+        float  invHalfH = 2f / Mathf.Max(bucketHeight, 1e-4f);
+
+        int count = Mathf.Min(ActiveParticleCount, dest.Length);
+        for (int i = 0; i < count; i++)
+        {
+            float2 off = positions[i] - center;
+            dest[i] = new Vector3(
+                math.dot(off, axisX) * invHalfW,
+                math.dot(off, axisY) * invHalfH,
+                math.length(velocities[i]));
+        }
+        return count;
+    }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Jobs

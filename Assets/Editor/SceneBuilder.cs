@@ -117,7 +117,7 @@ public class SceneBuilder
         sph.stiffness             = 200f;
         sph.viscosityCoeff        = 0.02f;
         sph.particleMass          = 0.005f;
-        sph.initialParticleCount  = 3000;
+        sph.initialParticleCount  = 5000;
         sph.bucketWidth           = 0.15f;
         sph.bucketHeight          = 0.20f;
         sph.holeWidth             = 0.05f;
@@ -150,6 +150,11 @@ public class SceneBuilder
         ui.flowController = flow;
         ui.canvasPainter  = painter;
         ui.sphSimulator   = sph;
+
+        // --- Bucket fluid inset (bottom-right corner) ---
+        BucketFluidInset inset = simManager.AddComponent<BucketFluidInset>();
+        inset.sph      = sph;
+        inset.pendulum = sim;
 
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene());

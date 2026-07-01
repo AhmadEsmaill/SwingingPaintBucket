@@ -650,7 +650,7 @@
                 },
                 {
                     "name": "right",
-                    "id": "fcd248ae-a788-4676-a12e-f4d81205600b",
+                    "id": "fcd248ae-a788-4676-a12e-f4d81203000b",
                     "path": "<Gamepad>/leftStick/right",
                     "interactions": "",
                     "processors": "",
