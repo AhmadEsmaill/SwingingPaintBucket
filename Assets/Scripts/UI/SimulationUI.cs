@@ -9,7 +9,8 @@ public class SimulationUI : MonoBehaviour
     public SPHSimulator          sphSimulator;
 
     private float ropeLength   = 1.5f;
-    private float initialAngle = 45f;
+    private float initialAngle = 45f;                 // default release angle
+    private string initialAngleText = "45";           // exact typed entry (kept in sync)
     private float forceMag     = 0f;
     private float forceAngle   = 0f;
 
@@ -179,8 +180,20 @@ public class SimulationUI : MonoBehaviour
         GUILayout.Space(6);
 
         // ── Initial Angle ──────────────────────────────────────
-        GUILayout.Label("Initial Angle: " + initialAngle.ToString("F1") + " deg", labelStyle);
-        initialAngle = GUILayout.HorizontalSlider(initialAngle, -85f, 85f);
+        // Slider for quick setting + a text field for an exact value; the two stay
+        // in sync (default stays at 45°).
+        GUILayout.Label("Initial Angle (deg)", labelStyle);
+        GUILayout.BeginHorizontal();
+        float sliderAngle = GUILayout.HorizontalSlider(initialAngle, -85f, 85f);
+        if (!Mathf.Approximately(sliderAngle, initialAngle))
+        {
+            initialAngle     = sliderAngle;
+            initialAngleText = initialAngle.ToString("F1");   // slider drag → refresh text
+        }
+        initialAngleText = GUILayout.TextField(initialAngleText, GUILayout.Width(55));
+        if (float.TryParse(initialAngleText, out float typedAngle))   // typed → update value
+            initialAngle = Mathf.Clamp(typedAngle, -85f, 85f);
+        GUILayout.EndHorizontal();
         GUILayout.Space(10);
 
         // ── Initial Force ──────────────────────────────────────
