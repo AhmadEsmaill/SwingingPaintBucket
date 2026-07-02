@@ -58,8 +58,10 @@ public class SceneBuilder
         canvas.transform.localScale = new Vector3(8, 8, 1);
         Object.DestroyImmediate(canvas.GetComponent<Collider>());
 
-        Material canvasMat = new Material(Shader.Find("Standard"));
-        canvasMat.color = Color.white;
+        // Unlit so the painted texture shows its true colours — an unlit surface
+        // isn't tinted/darkened by scene lighting, so the paint on the canvas
+        // matches the paint colour (and the unlit droplet) exactly.
+        Material canvasMat = new Material(Shader.Find("Unlit/Texture"));
         canvas.GetComponent<Renderer>().sharedMaterial = canvasMat;
 
         CanvasPainter painter = canvas.AddComponent<CanvasPainter>();
@@ -127,7 +129,7 @@ public class SceneBuilder
         flow.pendulum      = sim;
         flow.canvasPainter = painter;
         flow.dropletPrefab = dropletObj;
-        flow.paintColor    = Color.red;
+        flow.layers        = new System.Collections.Generic.List<PaintLayer> { new PaintLayer(Color.red, 1f) };
         flow.viscosity     = 0.01f;
         flow.holeRadius    = 0.005f;
         flow.poolSize      = 500;

@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 public class SimulationUI : MonoBehaviour
 {
@@ -15,10 +16,21 @@ public class SimulationUI : MonoBehaviour
     // Bucket properties
     private float bucketMass    = 0.5f;    // kg
     private float bucketRadius  = 0.15f;   // m
-    private float paintAmount   = 0.3f;    // kg
+    private float paintVolume   = 0.5f;    // litres (converted to kg for the physics)
     private float holeRadius    = 0.005f;  // m
-    private float r = 1f, g = 0f, b = 0f;         // Color A
-    private float r2 = 0f, g2 = 0f, b2 = 1f;     // Color B
+
+    // Typical emulsion/latex paint is ~1.3 kg per litre. The pendulum works in
+    // mass (kg), so the litre figure the user enters is scaled by this to get kg.
+    private const float PaintDensity = 1.3f;   // kg / L
+
+    // Ordered paint layers: [0] is poured first (bottom → exits first).
+    private readonly List<PaintLayer> paintLayers =
+        new List<PaintLayer> { new PaintLayer(Color.red, 1f) };
+    private int selectedLayer = 0;
+    // Palette used for each freshly added layer, cycled by index.
+    private static readonly Color[] palette =
+        { Color.red, Color.blue, new Color(1f, 0.85f, 0f), Color.green,
+          new Color(0.6f, 0.2f, 0.9f), Color.cyan, new Color(1f, 0.4f, 0f), Color.white };
 
     private string forceMagText   = "0";
     private string forceAngleText = "0";
@@ -187,35 +199,74 @@ public class SimulationUI : MonoBehaviour
 
         GUILayout.Space(10);
 
-        // ── Paint Colors + Bucket Blend ────────────────────────
+        // ── Paint Colours (ordered layers) ─────────────────────
         GUILayout.Label("Bucket Paint", titleStyle);
+        GUILayout.Space(2);
+        GUIStyle noteStyle = new GUIStyle(labelStyle)
+            { fontSize = 10, normal = { textColor = new Color(0.6f, 0.6f, 0.6f) } };
+        GUILayout.Label("Order = pour order. #1 sits at the bottom", noteStyle);
+        GUILayout.Label("and (unmixed) exits the hole first.", noteStyle);
         GUILayout.Space(4);
 
-        // Color A
-        GUILayout.Label("Color A", labelStyle);
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("R", labelStyle, GUILayout.Width(15));
-        r = GUILayout.HorizontalSlider(r, 0f, 1f);
-        GUILayout.Label(r.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("G", labelStyle, GUILayout.Width(15));
-        g = GUILayout.HorizontalSlider(g, 0f, 1f);
-        GUILayout.Label(g.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("B", labelStyle, GUILayout.Width(15));
-        b = GUILayout.HorizontalSlider(b, 0f, 1f);
-        GUILayout.Label(b.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUI.color = new Color(r, g, b);
-        GUILayout.Box("", GUILayout.Height(18), GUILayout.Width(60));
-        GUI.color = Color.white;
+        float weightTotal = 0f;
+        foreach (var l in paintLayers) weightTotal += Mathf.Max(0f, l.fraction);
+        if (weightTotal <= 0f) weightTotal = 1f;
 
-        GUILayout.Space(6);
+        int removeIdx = -1;
+        for (int i = 0; i < paintLayers.Count; i++)
+        {
+            PaintLayer layer = paintLayers[i];
+            int pct = Mathf.RoundToInt(Mathf.Max(0f, layer.fraction) / weightTotal * 100f);
 
-        // Blend ratio between A and B
-        GUILayout.Label("Mix A → B", labelStyle);
+            GUILayout.BeginHorizontal();
+
+            GUI.color = layer.color;
+            GUILayout.Box("", GUILayout.Width(22), GUILayout.Height(22));
+            GUI.color = Color.white;
+
+            GUIStyle rowStyle = (i == selectedLayer) ? listItemSelectedStyle : listItemStyle;
+            string   rowLabel = string.Format("{0}#{1}  —  {2}%",
+                i == selectedLayer ? "✓ " : "   ", i + 1, pct);
+            if (GUILayout.Button(rowLabel, rowStyle, GUILayout.Height(22)))
+                selectedLayer = i;
+
+            if (paintLayers.Count > 1 &&
+                GUILayout.Button("✕", listItemStyle, GUILayout.Width(24), GUILayout.Height(22)))
+                removeIdx = i;   // defer removal until after the loop (stable layout)
+
+            GUILayout.EndHorizontal();
+        }
+        if (removeIdx >= 0 && paintLayers.Count > 1)
+        {
+            paintLayers.RemoveAt(removeIdx);
+            selectedLayer = Mathf.Clamp(selectedLayer, 0, paintLayers.Count - 1);
+        }
+
+        GUILayout.Space(4);
+        if (GUILayout.Button("＋ Add Colour", GUILayout.Height(26)))
+        {
+            paintLayers.Add(new PaintLayer(palette[paintLayers.Count % palette.Length], 1f));
+            selectedLayer = paintLayers.Count - 1;
+        }
+
+        GUILayout.Space(8);
+
+        // Selected layer: palette picker + amount.
+        selectedLayer = Mathf.Clamp(selectedLayer, 0, paintLayers.Count - 1);
+        PaintLayer sel = paintLayers[selectedLayer];
+
+        GUILayout.Label("Colour #" + (selectedLayer + 1), labelStyle);
+        sel.color = ColorPicker.Draw(sel.color, panelW - 60f);
+
+        GUILayout.Space(4);
+        int selPct = Mathf.RoundToInt(Mathf.Max(0f, sel.fraction) / weightTotal * 100f);
+        GUILayout.Label("Amount of total: " + selPct + " %", labelStyle);
+        sel.fraction = GUILayout.HorizontalSlider(sel.fraction, 0.05f, 1f);
+
+        GUILayout.Space(8);
+
+        // Mixing: 0 = clean layers (FIFO), 100% = fully pre-mixed.
+        GUILayout.Label("Mixing", labelStyle);
         GUILayout.Space(2);
         for (int i = 0; i < blendLabels.Length; i++)
         {
@@ -231,29 +282,6 @@ public class SimulationUI : MonoBehaviour
             }
         }
 
-        GUILayout.Space(6);
-
-        // Color B
-        GUILayout.Label("Color B", labelStyle);
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("R", labelStyle, GUILayout.Width(15));
-        r2 = GUILayout.HorizontalSlider(r2, 0f, 1f);
-        GUILayout.Label(r2.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("G", labelStyle, GUILayout.Width(15));
-        g2 = GUILayout.HorizontalSlider(g2, 0f, 1f);
-        GUILayout.Label(g2.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("B", labelStyle, GUILayout.Width(15));
-        b2 = GUILayout.HorizontalSlider(b2, 0f, 1f);
-        GUILayout.Label(b2.ToString("F2"), labelStyle, GUILayout.Width(35));
-        GUILayout.EndHorizontal();
-        GUI.color = new Color(r2, g2, b2);
-        GUILayout.Box("", GUILayout.Height(18), GUILayout.Width(60));
-        GUI.color = Color.white;
-
         GUILayout.Space(10);
 
         // ── Bucket Properties ──────────────────────────────────
@@ -268,8 +296,8 @@ public class SimulationUI : MonoBehaviour
         bucketRadius = GUILayout.HorizontalSlider(bucketRadius, 0.05f, 0.40f);
         GUILayout.Space(4);
 
-        GUILayout.Label("Paint amount: " + paintAmount.ToString("F2") + " kg", labelStyle);
-        paintAmount = GUILayout.HorizontalSlider(paintAmount, 0.05f, 2f);
+        GUILayout.Label("Paint amount: " + paintVolume.ToString("F2") + " L", labelStyle);
+        paintVolume = GUILayout.HorizontalSlider(paintVolume, 0.1f, 3f);
         GUILayout.Space(4);
 
         GUILayout.Label("Hole diameter: " + (holeRadius * 2000f).ToString("F1") + " mm", labelStyle);
@@ -291,8 +319,7 @@ public class SimulationUI : MonoBehaviour
         GUILayout.EndScrollView();
         GUILayout.EndArea();
 
-        flowController?.SetColor(new Color(r, g, b));
-        flowController?.SetColorB(new Color(r2, g2, b2));
+        flowController?.SetLayers(paintLayers);
     }
 
     // ── Simulation control ────────────────────────────────────────────────────
@@ -311,8 +338,7 @@ public class SimulationUI : MonoBehaviour
         pendulum.initialForceMagnitude = forceMag;
         pendulum.initialForceAngle     = forceAngle;
         ApplyBucketProperties();
-        flowController?.SetColor(new Color(r, g, b));
-        flowController?.SetColorB(new Color(r2, g2, b2));
+        flowController?.SetLayers(paintLayers);
         flowController?.SetColorBlend(blendValues[selectedBlendIdx]);
 
         if (sphSimulator != null)
@@ -358,7 +384,7 @@ public class SimulationUI : MonoBehaviour
         {
             pendulum.bucketMass       = bucketMass;
             pendulum.bucketRadius     = bucketRadius;
-            pendulum.initialPaintMass = paintAmount;
+            pendulum.initialPaintMass = paintVolume * PaintDensity;
             // Paint depletion rate scales with hole area (r²), normalised to default r=0.005m
             pendulum.paintFlowRate    = 0.01f * Mathf.Pow(holeRadius / 0.005f, 2f);
         }

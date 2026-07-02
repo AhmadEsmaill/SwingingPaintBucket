@@ -22,6 +22,8 @@ public class BucketFluidInset : MonoBehaviour
     public float surfaceThreshold = 1.0f;   // coverage needed to count as liquid body
 
     [Header("Panel (screen pixels)")]
+    // Hidden for now; flip to true to bring the inset back.
+    public bool showPanel  = false;
     public int panelWidth  = 190;
     public int panelHeight = 250;
     public int margin      = 14;
@@ -60,6 +62,7 @@ public class BucketFluidInset : MonoBehaviour
 
     void Update()
     {
+        if (!showPanel) return;
         if (sph == null || tex == null || !sph.HasParticleData) return;
         RenderFluid();
     }
@@ -197,7 +200,7 @@ public class BucketFluidInset : MonoBehaviour
 
     void OnGUI()
     {
-        if (tex == null) return;
+        if (!showPanel || tex == null) return;
 
         if (titleStyle == null)
             titleStyle = new GUIStyle(GUI.skin.label)

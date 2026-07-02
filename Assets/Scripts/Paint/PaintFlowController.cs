@@ -1,6 +1,17 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+// One colour poured into the bucket. Layers are ordered: index 0 was poured
+// first, so it sits at the bottom and — with no mixing — exits the hole first.
+[System.Serializable]
+public class PaintLayer
+{
+    public Color color;
+    public float fraction;   // relative share of the total paint (normalised on use)
+
+    public PaintLayer(Color c, float f) { color = c; fraction = f; }
+}
+
 public class PaintFlowController : MonoBehaviour
 {
     [Header("References")]
@@ -8,9 +19,9 @@ public class PaintFlowController : MonoBehaviour
     public CanvasPainter canvasPainter;
     public GameObject dropletPrefab;
 
-    [Header("Paint Properties")]
-    public Color paintColor  = Color.red;
-    public Color paintColorB = Color.blue;
+    [Header("Paint Colours (index 0 = poured first = bottom = exits first)")]
+    public List<PaintLayer> layers = new List<PaintLayer> { new PaintLayer(Color.red, 1f) };
+    // 0 = sharp layers (FIFO, no mixing); 1 = fully pre-mixed single colour.
     public float colorBlendFactor = 0f;
     public float viscosity = 0.01f;
     public float holeRadius = 0.005f;
@@ -136,7 +147,7 @@ public class PaintFlowController : MonoBehaviour
             float   jit  = holeRadius * 0.5f;
             pos += new Vector3(Random.Range(-jit, jit), 0f, Random.Range(-jit, jit));
 
-            droplet.Launch(pos, vel, MixedColor(), radius, canvasPainter);
+            droplet.Launch(pos, vel, CurrentColor(), radius, canvasPainter);
             spawned++;
         }
     }
@@ -188,29 +199,54 @@ public class PaintFlowController : MonoBehaviour
             // Tiny lateral jitter → jet break-up, avoids a ruler-straight line.
             pos += new Vector3(Random.Range(-rDrop, rDrop), 0f, Random.Range(-rDrop, rDrop)) * 0.5f;
 
-            droplet.Launch(pos, jetVel, MixedColor(), rDrop, canvasPainter);
+            droplet.Launch(pos, jetVel, CurrentColor(), rDrop, canvasPainter);
         }
     }
 
-    private Color MixedColor()
+    // Colour of the paint exiting the hole right now. Bottom layer (index 0)
+    // drains first; as the bucket empties we walk up the stack. With blending
+    // the exiting colour is pulled toward the fully-mixed average.
+    private Color CurrentColor()
     {
-        if (colorBlendFactor <= 0f) return paintColor;
+        if (layers == null || layers.Count == 0) return Color.white;
+        if (layers.Count == 1) return layers[0].color;
 
-        float diff = Mathf.Abs(paintColor.r - paintColorB.r)
-                   + Mathf.Abs(paintColor.g - paintColorB.g)
-                   + Mathf.Abs(paintColor.b - paintColorB.b);
-        if (diff < 0.05f) return paintColor;
+        // Total weight + fully-mixed (weight-averaged) colour.
+        float total = 0f;
+        foreach (var l in layers) total += Mathf.Max(0f, l.fraction);
+        if (total <= 0f) return layers[0].color;
 
-        Color resultant = Color.Lerp(paintColor, paintColorB, 0.5f);
-        if (colorBlendFactor >= 1f) return resultant;
+        Color mixed = new Color(0f, 0f, 0f, 0f);
+        foreach (var l in layers)
+            mixed += l.color * (Mathf.Max(0f, l.fraction) / total);
 
-        return Random.value < colorBlendFactor
-            ? resultant
-            : (Random.value < 0.5f ? paintColor : paintColorB);
+        // Portion of the total that has already poured out. The exiting layer is
+        // the one whose cumulative band contains `emitted`.
+        float fill    = pendulum != null ? Mathf.Clamp01(pendulum.PaintFillRatio) : 1f;
+        float emitted = (1f - fill) * total;
+
+        Color layered = layers[layers.Count - 1].color;
+        float cum = 0f;
+        for (int i = 0; i < layers.Count; i++)
+        {
+            float w = Mathf.Max(0f, layers[i].fraction);
+            if (emitted <= cum + w || i == layers.Count - 1)
+            {
+                layered = layers[i].color;
+                break;
+            }
+            cum += w;
+        }
+
+        if (colorBlendFactor <= 0f) return layered;
+        if (colorBlendFactor >= 1f) return mixed;
+        return Random.value < colorBlendFactor ? mixed : layered;
     }
 
-    public void SetColor(Color c)       => paintColor        = c;
-    public void SetColorB(Color c)      => paintColorB       = c;
+    public void SetLayers(List<PaintLayer> src)
+    {
+        if (src != null && src.Count > 0) layers = src;
+    }
     public void SetColorBlend(float f)  => colorBlendFactor  = Mathf.Clamp01(f);
     public void SetViscosity(float v)   => viscosity         = v;
     public void SetFlowRate(float rate) => flowRateMultiplier = rate;

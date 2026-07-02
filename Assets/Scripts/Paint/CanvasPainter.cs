@@ -48,6 +48,16 @@ public class CanvasPainter : MonoBehaviour
     void Start()
     {
         canvasRenderer = GetComponent<Renderer>();
+
+        // Display the painted texture exactly as authored: an unlit shader so scene
+        // lighting/ambient can't tint the surface colour away from the real paint
+        // colour (the droplet in the air is already unlit — this makes them match).
+        if (canvasRenderer != null)
+        {
+            Shader unlit = Shader.Find("Unlit/Texture");
+            if (unlit != null) canvasRenderer.material.shader = unlit;
+        }
+
         SyncBlendFromSurface();
         InitTexture();
     }
@@ -120,8 +130,11 @@ public class CanvasPainter : MonoBehaviour
                       ? 0f                              // grain always horizontal
                       : (hSpeed > 0.05f ? Mathf.Atan2(hz, hx) : 0f);
 
-        // paintOpacity: 0%blend→1.0 (fully opaque), 75%blend→0.25 (transparent/mixing)
-        float paintOpacity = 1f - blendFactor;
+        // Core opacity of a fresh splat. Kept high so the mark reads as the actual
+        // paint colour instead of a washed-out tint of the surface; the surface's
+        // absorption only nudges it (absorbent paper looks a touch more solid than
+        // beading metal).
+        float paintOpacity = Mathf.Lerp(0.80f, 0.97f, Absorption[(int)surfaceType]);
 
         // ── Stroke interpolation ────────────────────────────────────────────
         float now = Time.time;
@@ -192,7 +205,7 @@ public class CanvasPainter : MonoBehaviour
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     private void PaintEllipse(int cx, int cy, int ra, int rb, float angle,
-                               Color color, float absorption)
+                               Color color, float opacity)
     {
         float cosA = Mathf.Cos(angle);
         float sinA = Mathf.Sin(angle);
@@ -209,7 +222,10 @@ public class CanvasPainter : MonoBehaviour
             float d  = (ex * ex) / (float)(ra * ra) + (ey * ey) / (float)(rb * rb);
             if (d > 1f) continue;
 
-            float alpha    = (1f - Mathf.Sqrt(d)) * absorption;
+            // Solid core out to ~45% of the radius, then a soft fade to the rim —
+            // keeps the centre true to the paint colour while edges stay feathered.
+            float t     = Mathf.Sqrt(d);                        // 0 = centre, 1 = rim
+            float alpha = (1f - Mathf.SmoothStep(0.45f, 1f, t)) * opacity;
             Color existing = paintTexture.GetPixel(px, py);
             paintTexture.SetPixel(px, py, Color.Lerp(existing, color, alpha));
         }
