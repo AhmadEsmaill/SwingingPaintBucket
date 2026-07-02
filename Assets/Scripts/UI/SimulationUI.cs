@@ -54,6 +54,13 @@ public class SimulationUI : MonoBehaviour
     private readonly string[] surfaceLabels = { "Canvas", "Metal", "Paper", "Wood" };
     private int selectedSurfaceIdx = 0;   // default: Canvas
 
+    // Canvas size (m) and tilt: raise one of the 4 corners (a/b/c/d) up to 45°.
+    private float canvasWidth  = 8f;
+    private float canvasLength = 8f;
+    private float canvasTilt   = 0f;      // degrees, 0..45
+    private readonly string[] cornerLabels = { "a", "b", "c", "d" };
+    private int selectedCornerIdx = 0;
+
     // Blend mode selector
     private readonly float[]  blendValues = { 0f, 0.25f, 0.5f, 0.75f, 1f };
     private readonly string[] blendLabels = { "No Blend", "25%", "50%", "75%", "100%" };
@@ -236,6 +243,33 @@ public class SimulationUI : MonoBehaviour
 
         GUILayout.Space(10);
 
+        // ── Canvas Size & Tilt ─────────────────────────────────
+        GUILayout.Label("Canvas", titleStyle);
+        GUILayout.Space(4);
+
+        GUILayout.Label("Width: " + canvasWidth.ToString("F1") + " m", labelStyle);
+        canvasWidth = GUILayout.HorizontalSlider(canvasWidth, 1f, 16f);
+        GUILayout.Space(2);
+        GUILayout.Label("Length: " + canvasLength.ToString("F1") + " m", labelStyle);
+        canvasLength = GUILayout.HorizontalSlider(canvasLength, 1f, 16f);
+        GUILayout.Space(4);
+
+        GUILayout.Label("Tilt: " + canvasTilt.ToString("F0") + "°  (raise corner)", labelStyle);
+        canvasTilt = GUILayout.HorizontalSlider(canvasTilt, 0f, 45f);
+        GUILayout.Space(2);
+        GUILayout.BeginHorizontal();
+        for (int i = 0; i < cornerLabels.Length; i++)
+        {
+            GUIStyle cs = (i == selectedCornerIdx) ? listItemSelectedStyle : listItemStyle;
+            if (GUILayout.Button(cornerLabels[i], cs, GUILayout.Height(24)))
+                selectedCornerIdx = i;
+        }
+        GUILayout.EndHorizontal();
+
+        canvasPainter?.SetGeometry(canvasWidth, canvasLength, selectedCornerIdx, canvasTilt);
+
+        GUILayout.Space(10);
+
         // ── Paint Colours (ordered layers) ─────────────────────
         GUILayout.Label("Bucket Paint", titleStyle);
         GUILayout.Space(2);
@@ -357,6 +391,24 @@ public class SimulationUI : MonoBehaviour
         GUILayout.EndArea();
 
         flowController?.SetLayers(paintLayers);
+
+        // While idle, keep the bucket posed at the current release settings so angle
+        // / rope / handle changes preview live before Start. Once per frame (Repaint).
+        if (!isRunning && Event.current.type == EventType.Repaint)
+            ApplyReleasePreview();
+    }
+
+    // Puts the pendulum in its release pose from the current UI settings, without
+    // starting the simulation — used for the live pre-Start preview.
+    private void ApplyReleasePreview()
+    {
+        if (pendulum == null) return;
+        pendulum.ropeLength      = ropeLength;
+        pendulum.ropeStiffness   = ropeStiffness[selectedRopeIdx];
+        pendulum.ropeDamping     = ropeDampCoeff[selectedRopeIdx];
+        pendulum.initialAngleDeg = initialAngle;
+        ApplyBucketProperties();     // pushes handle attach, radius, etc.
+        pendulum.Initialize();       // repositions bucket + rope to the new pose
     }
 
     // ── Simulation control ────────────────────────────────────────────────────

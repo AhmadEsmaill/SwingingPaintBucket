@@ -149,7 +149,7 @@ public class PaintFlowController : MonoBehaviour
             float   jit  = holeRadius * 0.5f;
             pos += new Vector3(Random.Range(-jit, jit), 0f, Random.Range(-jit, jit));
 
-            droplet.Launch(pos, vel, CurrentColor(), radius, canvasPainter);
+            droplet.Launch(pos, vel, CurrentColor(), radius, canvasPainter, pendulum.RopeDirection);
             spawned++;
         }
     }
@@ -203,7 +203,7 @@ public class PaintFlowController : MonoBehaviour
             // Tiny lateral jitter → jet break-up, avoids a ruler-straight line.
             pos += new Vector3(Random.Range(-rDrop, rDrop), 0f, Random.Range(-rDrop, rDrop)) * 0.5f;
 
-            droplet.Launch(pos, jetVel, CurrentColor(), rDrop, canvasPainter);
+            droplet.Launch(pos, jetVel, CurrentColor(), rDrop, canvasPainter, pendulum.RopeDirection);
         }
     }
 

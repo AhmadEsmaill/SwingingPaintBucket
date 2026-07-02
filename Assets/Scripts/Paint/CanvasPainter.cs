@@ -8,6 +8,11 @@ public class CanvasPainter : MonoBehaviour
     public float canvasWorldWidth  = 4f;
     public float canvasWorldHeight = 4f;
 
+    [Header("Orientation")]
+    // Tilt the board up to 45° by raising one of its four corners (a,b,c,d).
+    [Range(0f, 45f)] public float tiltAngleDeg = 0f;
+    public int tiltCorner = 0;   // 0=a, 1=b, 2=c, 3=d
+
     [Header("Surface Type")]
     public SurfaceType surfaceType = SurfaceType.Canvas;
 
@@ -59,6 +64,7 @@ public class CanvasPainter : MonoBehaviour
         }
 
         SyncBlendFromSurface();
+        SetGeometry(canvasWorldWidth, canvasWorldHeight, tiltCorner, tiltAngleDeg);
         InitTexture();
     }
 
@@ -80,6 +86,39 @@ public class CanvasPainter : MonoBehaviour
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
+
+    // Upward-facing normal of the (possibly tilted) board, and a point on it — used
+    // by droplets to detect impact against the real surface plane, not the floor.
+    public Vector3 SurfaceNormal { get { Vector3 n = transform.forward; return n.y < 0f ? -n : n; } }
+    public Vector3 SurfacePoint  => transform.position;
+
+    // Sets the board size (m) and its tilt: raise corner (0=a,1=b,2=c,3=d) by
+    // `tiltDeg` degrees (0..45) about the diagonal through the other two corners.
+    public void SetGeometry(float width, float length, int corner, float tiltDeg)
+    {
+        canvasWorldWidth  = Mathf.Max(0.5f, width);
+        canvasWorldHeight = Mathf.Max(0.5f, length);
+        tiltCorner        = Mathf.Clamp(corner, 0, 3);
+        tiltAngleDeg      = Mathf.Clamp(tiltDeg, 0f, 45f);
+
+        transform.localScale = new Vector3(canvasWorldWidth, canvasWorldHeight, 1f);
+
+        Quaternion baseFlat = Quaternion.Euler(90f, 0f, 0f);   // lie in the XZ plane
+        if (tiltAngleDeg <= 0.001f) { transform.rotation = baseFlat; return; }
+
+        float hw = canvasWorldWidth * 0.5f, hl = canvasWorldHeight * 0.5f;
+        Vector3[] corners =
+        {
+            new Vector3(-hw, 0f, -hl),  // a
+            new Vector3( hw, 0f, -hl),  // b
+            new Vector3( hw, 0f,  hl),  // c
+            new Vector3(-hw, 0f,  hl),  // d
+        };
+        Vector3 cornerDir = corners[tiltCorner].normalized;
+        // Horizontal axis so a positive angle lifts the chosen corner.
+        Vector3 axis = Vector3.Cross(cornerDir, Vector3.up).normalized;
+        transform.rotation = Quaternion.AngleAxis(tiltAngleDeg, axis) * baseFlat;
+    }
 
     // Change surface type; clears canvas so the background colour takes effect.
     public void SetSurfaceType(SurfaceType type)

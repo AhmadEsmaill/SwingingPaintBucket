@@ -13,7 +13,7 @@ public class PaintDroplet : MonoBehaviour
     private CanvasPainter canvasPainter;
 
     public void Launch(Vector3 startPosition, Vector3 initialVelocity, Color paintColor,
-                       float dropletRadius, CanvasPainter painter)
+                       float dropletRadius, CanvasPainter painter, Vector3 axisDir)
     {
         // Pause trail BEFORE moving — prevents a streak from the old position to the new one
         var trail = GetComponent<TrailRenderer>();
@@ -27,7 +27,15 @@ public class PaintDroplet : MonoBehaviour
         isActive      = true;
         lifetime      = 0f;
 
-        transform.localScale = Vector3.one * radius * 2f;
+        // Elongate the droplet along its local Y, then orient that long axis along
+        // the rope axis, so the drop's axis stays (roughly) parallel to the rope at
+        // any swing angle instead of standing upright to the canvas. This only sets
+        // the visual orientation — the flight velocity/direction is unchanged.
+        float d = radius * 2f;
+        transform.localScale = new Vector3(d * 0.8f, d * 1.8f, d * 0.8f);
+        transform.rotation   = axisDir.sqrMagnitude > 1e-6f
+            ? Quaternion.FromToRotation(Vector3.up, axisDir.normalized)
+            : Quaternion.identity;
         GetComponent<Renderer>().material.color = color;
 
         if (trail != null)
@@ -60,7 +68,15 @@ public class PaintDroplet : MonoBehaviour
         velocity           += ((gravityForce + dragForce) / mass) * dt;
         transform.position += velocity * dt;
 
-        if (transform.position.y <= 0.01f) HitCanvas();
+        // Impact against the board's real plane (handles tilt), falling back to the
+        // flat floor (y≈0) if no canvas is wired.
+        if (canvasPainter != null)
+        {
+            float sd = Vector3.Dot(transform.position - canvasPainter.SurfacePoint,
+                                   canvasPainter.SurfaceNormal);
+            if (sd <= 0.01f) HitCanvas();
+        }
+        else if (transform.position.y <= 0.01f) HitCanvas();
     }
 
     private void HitCanvas()
