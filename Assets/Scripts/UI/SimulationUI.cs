@@ -44,6 +44,11 @@ public class SimulationUI : MonoBehaviour
     private readonly float[]  ropeDampCoeff  = { 2f,      8f,     3f,     1.5f,      0.5f     };
     private int selectedRopeIdx = 0;   // default: Rigid
 
+    // Rope attachment on the bucket's handle (bail): A = centre/apex (balanced),
+    // B = left join, C = right join. B/C make the bucket hang tilted.
+    private readonly string[] handleLabels = { "A — Centre (apex)", "B — Left join", "C — Right join" };
+    private int selectedHandleIdx = 0;   // default: A (current behaviour)
+
     // Surface type selector
     private readonly string[] surfaceLabels = { "Canvas", "Metal", "Paper", "Wood" };
     private int selectedSurfaceIdx = 0;   // default: Canvas
@@ -151,6 +156,25 @@ public class SimulationUI : MonoBehaviour
             string   rl = (i == selectedRopeIdx) ? "✓  " + ropeLabels[i] : "    " + ropeLabels[i];
             if (GUILayout.Button(rl, rs, GUILayout.Height(26)))
                 selectedRopeIdx = i;
+        }
+        GUILayout.Space(6);
+
+        // ── Rope Attachment (handle) ───────────────────────────
+        GUILayout.Label("Rope Attachment", titleStyle);
+        GUILayout.Space(4);
+        for (int i = 0; i < handleLabels.Length; i++)
+        {
+            GUIStyle hs = (i == selectedHandleIdx) ? listItemSelectedStyle : listItemStyle;
+            string   hl = (i == selectedHandleIdx) ? "✓  " + handleLabels[i] : "    " + handleLabels[i];
+            if (GUILayout.Button(hl, hs, GUILayout.Height(26)))
+            {
+                selectedHandleIdx = i;
+                if (pendulum != null)
+                {
+                    pendulum.handleAttach = (PendulumSimulator.HandleAttachPoint)i;
+                    if (!isRunning) pendulum.Initialize();   // show the new tilt at rest
+                }
+            }
         }
         GUILayout.Space(6);
 
@@ -384,6 +408,7 @@ public class SimulationUI : MonoBehaviour
         {
             pendulum.bucketMass       = bucketMass;
             pendulum.bucketRadius     = bucketRadius;
+            pendulum.handleAttach     = (PendulumSimulator.HandleAttachPoint)selectedHandleIdx;
             pendulum.initialPaintMass = paintVolume * PaintDensity;
             // Paint depletion rate scales with hole area (r²), normalised to default r=0.005m
             pendulum.paintFlowRate    = 0.01f * Mathf.Pow(holeRadius / 0.005f, 2f);

@@ -126,20 +126,22 @@ public class PaintFlowController : MonoBehaviour
 
             SPHParticle p = pendingExits.Dequeue();
 
-            // Vertical: a clean downward Torricelli exit (never upward — paint pours
-            // from a hole at the bucket bottom).
-            float downExit = Mathf.Sqrt(2f * pendulum.gravity
+            // Torricelli exit *speed* (magnitude), driven by the paint column height.
+            float exitSpeed = Mathf.Sqrt(2f * pendulum.gravity
                              * Mathf.Max(0f, pendulum.PaintFillRatio) * 0.2f);
-            downExit = Mathf.Max(0.5f, downExit * 0.6f);
+            exitSpeed = Mathf.Max(0.5f, exitSpeed * 0.6f);
 
-            // Horizontal: keep a fraction of the bucket's swing velocity (swingCarry).
-            // The arc itself comes from the moving hole; full inheritance overshoots.
-            // A small random scatter gives the stream width, not a razor-thin line.
-            float scatter = 0.06f;
-            Vector3 vel = new Vector3(
-                bVel.x * swingCarry + Random.Range(-scatter, scatter),
-                -downExit,
-                bVel.z * swingCarry + Random.Range(-scatter, scatter));
+            // The paint is pushed out along the bucket's OWN axis — the rope
+            // direction — not straight down. When the bucket swings out, that axis
+            // tilts, so at the extremes (where the bucket is momentarily still) the
+            // paint still launches diagonally outward: the inertial "throw". The
+            // direction varies smoothly with the swing, so the stream sweeps fluidly
+            // across the canvas instead of dropping vertically. The bucket's own
+            // velocity (scaled by swingCarry) adds the mid-swing sideways fling.
+            Vector3 exitDir = pendulum.BucketDownDirection;
+            float   scatter = 0.06f;
+            Vector3 vel = bVel * swingCarry + exitDir * exitSpeed
+                + new Vector3(Random.Range(-scatter, scatter), 0f, Random.Range(-scatter, scatter));
 
             // Spread the frame's group along the fall path so they don't stack.
             float   frac = release > 1 ? (float)spawned / release : 0f;
@@ -184,8 +186,10 @@ public class PaintFlowController : MonoBehaviour
 
         Vector3 holePos   = pendulum.BucketHolePosition;
         Vector3 bucketVel = pendulum.BucketVelocity;
-        // Jet inherits the bucket's horizontal velocity + downward exit speed.
-        Vector3 jetVel = new Vector3(bucketVel.x, -exitSpeed, bucketVel.z);
+        // Jet leaves along the bucket's own down-axis (tilted by the handle attach),
+        // so a swung-out or off-centre-hung bucket throws it at an angle, plus the
+        // bucket's own horizontal velocity.
+        Vector3 jetVel = bucketVel + pendulum.BucketDownDirection * exitSpeed;
 
         for (int i = 0; i < count; i++)
         {

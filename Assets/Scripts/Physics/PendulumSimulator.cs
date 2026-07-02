@@ -7,6 +7,15 @@ public class PendulumSimulator : MonoBehaviour
     public float bucketRadius = 0.1f;
     public float bucketHalfHeight = 0.2f;  // half the visual bucket height (world units)
 
+    public enum HandleAttachPoint { A_Center, B_Left, C_Right }
+    [Header("Handle (bail) & rope attachment")]
+    // Where the rope attaches on the bucket's bail: A = middle/apex of the arc
+    // (balanced — the original behaviour), B = the left join with the bucket,
+    // C = the right join. An off-centre attach makes the bucket hang tilted (its
+    // centre of mass settles under the attach point), so it pours at an angle.
+    public HandleAttachPoint handleAttach = HandleAttachPoint.A_Center;
+    public float handleArcHeight = 0.12f;   // how high the bail arcs above the rim (m)
+
     [Header("Rope Properties")]
     public float ropeLength   = 1.5f;
     public float dampingCoeff = 0.05f;
@@ -48,6 +57,13 @@ public class PendulumSimulator : MonoBehaviour
     private bool    isSimulating;
     private Vector3 ropeDirection = Vector3.down;
 
+    // Derived bucket geometry (accounts for the handle tilt), refreshed each step.
+    private Vector3 bucketCenterPos;
+    private Vector3 bucketDownDir = Vector3.down;
+    private Vector3 bucketHolePos;
+    private LineRenderer handleRenderer;
+    private const int HandleSegments = 20;
+
     public float CurrentLength => currentLength;
 
     // Public read-only properties used by PaintFlowController and others
@@ -58,17 +74,20 @@ public class PendulumSimulator : MonoBehaviour
     public float   PaintMass       => currentPaintMass;
     public float   PaintFillRatio  => initialPaintMass > 0f ? currentPaintMass / initialPaintMass : 0f;
     public bool    IsSimulating    => isSimulating;
-    // Rope attachment point (top of bucket)
+    // Rope attachment point on the bail (rope end / pendulum bob).
     public Vector3 BucketPosition  { get; private set; }
-    // Visual center: half-height further along the rope direction
-    public Vector3 BucketCenter      => BucketPosition + ropeDirection * bucketHalfHeight;
-    // Bottom face of the bucket where the hole sits (full height along rope)
-    public Vector3 BucketHolePosition => BucketPosition + ropeDirection * (bucketHalfHeight * 2f);
+    // Centre of mass, hole position and the bucket's own downward axis. These
+    // account for the handle tilt (for B/C the bucket hangs at an angle), so they
+    // no longer lie straight along the rope.
+    public Vector3 BucketCenter        => bucketCenterPos;
+    public Vector3 BucketHolePosition  => bucketHolePos;
+    public Vector3 BucketDownDirection => bucketDownDir;
     public Vector3 BucketVelocity  { get; private set; }
     public Vector3 RopeDirection   => ropeDirection;
 
     void Start()
     {
+        EnsureHandleRenderer();
         Initialize();
     }
 
@@ -127,6 +146,8 @@ public class PendulumSimulator : MonoBehaviour
 
     void Update()
     {
+        // While idle, refresh the bucket pose so handle / size changes show live.
+        if (!isSimulating) UpdateBucketTransform();
         // Always update rope visual so it shows even before simulation starts
         UpdateRopeRenderer();
     }
@@ -220,11 +241,72 @@ public class PendulumSimulator : MonoBehaviour
         BucketPosition = pivotPoint.position + relPos;
         ropeDirection  = relPos.sqrMagnitude > 1e-8f ? relPos.normalized : Vector3.down;
 
+        // Orientation: align the bucket's up with the rope, then tilt by the handle
+        // offset so an off-centre attach (B/C) makes the bucket hang at an angle.
+        Quaternion baseRot   = Quaternion.FromToRotation(Vector3.up, -ropeDirection);
+        Quaternion bucketRot = baseRot * Quaternion.AngleAxis(HandleTiltDeg(), Vector3.forward);
+
+        // Geometry from the attach point: centre of mass sits under the attach point,
+        // and the hole is at the bucket's bottom — both in the tilted bucket frame.
+        bucketDownDir   = bucketRot * Vector3.down;
+        Vector2 a       = AttachLocal();
+        bucketCenterPos = BucketPosition + bucketRot * new Vector3(-a.x, -a.y, 0f);
+        bucketHolePos   = bucketCenterPos + bucketDownDir * bucketHalfHeight;
+
         if (bucketTransform != null)
         {
-            bucketTransform.position = BucketCenter;
-            // Bucket local-Y aligns with the rope toward the pivot
-            bucketTransform.rotation = Quaternion.FromToRotation(Vector3.up, -ropeDirection);
+            bucketTransform.position = bucketCenterPos;
+            bucketTransform.rotation = bucketRot;
+        }
+
+        UpdateHandleRenderer(bucketRot);
+    }
+
+    // Attachment point on the bucket in local space (x = right, y = up from centre).
+    private Vector2 AttachLocal()
+    {
+        switch (handleAttach)
+        {
+            case HandleAttachPoint.B_Left:  return new Vector2(-bucketRadius, bucketHalfHeight);
+            case HandleAttachPoint.C_Right: return new Vector2( bucketRadius, bucketHalfHeight);
+            default:                        return new Vector2(0f, bucketHalfHeight + handleArcHeight);
+        }
+    }
+
+    // Extra tilt of the bucket relative to the rope: it rotates until its centre of
+    // mass hangs directly under the attach point (static equilibrium). 0 for centre.
+    private float HandleTiltDeg()
+    {
+        Vector2 a = AttachLocal();
+        return Mathf.Atan2(a.x, a.y) * Mathf.Rad2Deg;
+    }
+
+    private void EnsureHandleRenderer()
+    {
+        if (handleRenderer != null) return;
+        var go = new GameObject("BucketHandle");
+        handleRenderer = go.AddComponent<LineRenderer>();
+        handleRenderer.useWorldSpace  = true;
+        handleRenderer.positionCount  = HandleSegments + 1;
+        handleRenderer.startWidth     = 0.02f;
+        handleRenderer.endWidth       = 0.02f;
+        handleRenderer.numCapVertices = 2;
+        handleRenderer.sharedMaterial =
+            new Material(Shader.Find("Unlit/Color")) { color = new Color(0.85f, 0.85f, 0.9f) };
+    }
+
+    // Draws the bail as an arc from the left join (B) up over the apex (A) to the
+    // right join (C), in the (possibly tilted) bucket frame.
+    private void UpdateHandleRenderer(Quaternion bucketRot)
+    {
+        if (handleRenderer == null) return;
+        float r = bucketRadius, h = bucketHalfHeight, arc = handleArcHeight;
+        for (int i = 0; i <= HandleSegments; i++)
+        {
+            float t  = (float)i / HandleSegments;            // 0 = left join, 1 = right join
+            float lx = Mathf.Lerp(-r, r, t);
+            float ly = h + arc * Mathf.Sin(t * Mathf.PI);    // apex in the middle, 0 at ends
+            handleRenderer.SetPosition(i, bucketCenterPos + bucketRot * new Vector3(lx, ly, 0f));
         }
     }
 
